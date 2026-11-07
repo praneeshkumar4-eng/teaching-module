@@ -216,3 +216,5 @@ Execute the automated pytest suite:
 .\.venv\Scripts\pytest.exe -v tests/test_lessonforge.py
 ```
 Outputs: 9 passed in ~1.9s.
+#   t e a c h i n g - m o d u l e  
+ 
