@@ -389,7 +389,20 @@ MALFORMED TEXT:
                 "cited_source_ids": ["S1", "S2", "S3"]
             })
 
-        return "Standard offline text response."
+        # Revision / other text calls — return a meaningful stub so the UI
+        # doesn't display a bare "Standard offline text response." message.
+        if "revision" in call_purpose or "revise" in call_purpose.lower():
+            return (
+                "# [Offline Mode] Lesson Revision Stub\n\n"
+                "**Note:** No Gemini API key is configured. In live mode, the revised lesson "
+                "would be returned here with the selected QC fixes applied.\n\n"
+                "To enable real AI revisions, enter your Gemini API Key in the ⚙️ sidebar panel."
+            )
+
+        return (
+            "**Offline Prototype Mode** — Set `GEMINI_API_KEY` in the sidebar or `.env` "
+            "to generate real AI content. All features are fully functional once a key is provided."
+        )
 
 
 # Global client instance
