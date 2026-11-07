@@ -37,30 +37,33 @@ def render_create_view():
     st.markdown("#### ⚡ Quick Demo Pre-Loaders")
     col_e1, col_e2, _ = st.columns([1.5, 1.5, 3])
 
-    if "form_title" not in st.session_state:
-        st.session_state.form_title = ""
-    if "form_objective" not in st.session_state:
-        st.session_state.form_objective = ""
+    # Streamlit widget keys must match session_state keys directly so that
+    # setting session_state before st.rerun() correctly pre-fills the widgets.
+    if "input_title_key" not in st.session_state:
+        st.session_state.input_title_key = ""
+    if "input_obj_key" not in st.session_state:
+        st.session_state.input_obj_key = ""
 
     with col_e1:
         if st.button("📋 Load Test 1: HTTP Protocol", use_container_width=True):
-            st.session_state.form_title = DEMO_EXAMPLES["Test 1: HTTP Protocols"]["title"]
-            st.session_state.form_objective = DEMO_EXAMPLES["Test 1: HTTP Protocols"]["objective"]
+            # Set the SAME keys that the widgets below use — Streamlit will
+            # read these on the next run and display them as the widget value.
+            st.session_state.input_title_key = DEMO_EXAMPLES["Test 1: HTTP Protocols"]["title"]
+            st.session_state.input_obj_key = DEMO_EXAMPLES["Test 1: HTTP Protocols"]["objective"]
             st.rerun()
 
     with col_e2:
         if st.button("📋 Load Test 2: Python Lists & Tuples", use_container_width=True):
-            st.session_state.form_title = DEMO_EXAMPLES["Test 2: Python Collections"]["title"]
-            st.session_state.form_objective = DEMO_EXAMPLES["Test 2: Python Collections"]["objective"]
+            st.session_state.input_title_key = DEMO_EXAMPLES["Test 2: Python Collections"]["title"]
+            st.session_state.input_obj_key = DEMO_EXAMPLES["Test 2: Python Collections"]["objective"]
             st.rerun()
 
     st.write("")
 
-    # Lesson inputs form
+    # Lesson inputs form — keys match session_state keys so pre-loading works
     with st.container():
         title = st.text_input(
             "Lesson Title *",
-            value=st.session_state.form_title,
             placeholder="e.g. HTTP Requests and Responses",
             help="A specific, clear title for your 45-minute lesson.",
             key="input_title_key",
@@ -68,16 +71,11 @@ def render_create_view():
 
         objective = st.text_area(
             "Learning Objective *",
-            value=st.session_state.form_objective,
             placeholder="e.g. Explain GET and POST methods and distinguish between 2xx, 4xx, and 5xx response status categories.",
             help="Measurable SWBAT objective stating what students will master.",
             height=110,
             key="input_obj_key",
         )
-
-        # Update session state with current inputs
-        st.session_state.form_title = title
-        st.session_state.form_objective = objective
 
         col_btn, _ = st.columns([2, 3])
         with col_btn:
