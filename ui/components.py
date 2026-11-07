@@ -29,6 +29,25 @@ def render_hero_header():
     )
 
 
+def render_header(title: str = "LessonForge", subtitle: str = "", badge: Optional[str] = None):
+    """Renders a branded page banner for views."""
+    sub_text = subtitle if subtitle else "<span>Research. Teach. Verify.</span> — Autonomous AI Lesson Creation Suite"
+    st.markdown(
+        f"""
+        <div class="lf-hero-banner">
+          <div class="lf-hero-title">
+            <span>⚒️</span> {title}
+          </div>
+          <div class="lf-hero-tagline">
+            {sub_text}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
 def render_progress_stepper(current_step: str = "Input"):
     """
     Renders the 6-stage workflow stepper:
