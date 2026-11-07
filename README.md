@@ -1,220 +1,462 @@
-# LessonForge ⚒️
-> **Research. Teach. Verify.**  
-> Autonomous, Grounded AI Lesson Creation Workstation for Teachers
+<div align="center">
 
-LessonForge is a local, AI-powered instructional workstation that empowers educators to build comprehensive, verified 45-minute lesson plans for any topic.
+<img src="https://img.shields.io/badge/LessonForge-AI%20Lesson%20Suite-6366f1?style=for-the-badge&logo=bookstack&logoColor=white" alt="LessonForge" height="40"/>
 
-Unlike generic chatbot wrappers, LessonForge retrieves **real research** across authoritative websites, academic books, and educational YouTube transcripts, strictly enforces grounding on that research with inline citations, and audits the lesson plan through **two independent automated Quality Control (QC) review layers** before presenting the result in an interactive teacher workspace with immutable versioning and multi-format exports.
+# ⚒️ LessonForge
+### *Autonomous AI Lesson Creation Suite for Teachers*
 
----
+> **Research. Teach. Verify.** — Build grounded, QC-reviewed 45-minute lesson plans powered by real web, book, and YouTube research.
 
-## 📸 Screenshots & Workflow
+<br/>
 
-```
-[ Hero Header: LessonForge — Research. Teach. Verify. ]
-[ Step Stepper: (1) Input  ──►  (2) Research  ──►  (3) Lesson  ──►  (4) QC Accuracy  ──►  (5) QC Teaching  ──►  (6) Edit & Export ]
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.35%2B-ff4b4b?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io)
+[![Google Gemini](https://img.shields.io/badge/Gemini-2.5%20Flash-4285f4?style=flat-square&logo=google&logoColor=white)](https://aistudio.google.com)
+[![License](https://img.shields.io/badge/License-MIT-22c55e?style=flat-square)](LICENSE)
+[![Tests](https://img.shields.io/badge/Tests-9%20Passed-16a34a?style=flat-square&logo=pytest&logoColor=white)](tests/)
+[![Offline Mode](https://img.shields.io/badge/Offline%20Prototype-Ready-f59e0b?style=flat-square)](README.md)
 
-+----------------------------------------------------------------------------------------------------+
-| Lesson Tab | Sources (11) | QC 1: Accuracy | QC 2: Teaching | Edit | Versions (v2) | Preview & Export |
-+----------------------------------------------------------------------------------------------------+
-| ⏱️ Lesson Pacing Timeline: [==== 3m ====][====== 7m ======][==== 10m ====][=== 8m ===][= 5m =][= 7m =][= 5m =] 45/45m |
-|                                                                                                    |
-| # HTTP Requests and Responses: Methods and Status Codes                                             |
-| Every web interaction operates on this client-server contract [S1]...                              |
-+----------------------------------------------------------------------------------------------------+
-```
+<br/>
+
+[🚀 Quick Start](#-quick-start) · [✨ Features](#-features) · [🏗️ Architecture](#️-architecture) · [📋 Project Structure](#-project-structure) · [🔑 API Keys](#-api-keys) · [🧪 Testing](#-testing)
+
+</div>
 
 ---
 
-## 🏗️ System Architecture
+## 🎯 What is LessonForge?
+
+LessonForge is a **fully local, AI-powered lesson creation tool** built for teachers. Unlike tools that generate generic content from thin air, LessonForge first **researches the topic by actually retrieving information** from real websites, books, and YouTube videos — then uses only that verified research to write a complete, grounded 45-minute classroom lesson.
+
+Every lesson goes through **two independent AI quality control layers** — one for factual accuracy, one for pedagogical quality — before the teacher ever reads it. Teachers can then edit, revise using selected QC suggestions, version-control their work, preview, and export everything as a professional ZIP bundle.
+
+```
+Teacher enters topic → Real research retrieved → Lesson grounded in sources
+                     → QC Layer 1: Fact check → QC Layer 2: Teaching quality
+                     → Edit, diff, version → Export ZIP
+```
+
+---
+
+## ✨ Features
+
+### 🔬 Step 1 — Grounded Research Pipeline
+- Retrieves **4–6 web pages**, **2–3 books**, and **2–3 YouTube videos** in parallel
+- **Tavily Search API** (primary) or **DuckDuckGo + Trafilatura** (automatic fallback) for web pages with full content extraction
+- **Google Books API** or **OpenLibrary** (fallback) for academic book descriptions
+- **YouTube Data API v3** or **DDG video search** (fallback) with real transcript fetching via `youtube-transcript-api`
+- Every source is normalized to a `S1, S2...` ID scheme with an `access_level` badge:
+  - ✅ **Full Text Verified** — page/transcript was actually read
+  - ⚠️ **Description Only** — only metadata/snippet was available (clearly disclosed to teacher)
+- **LLM never generates URLs.** All links come from API results only.
+- Research is cached per session — retrying generation never re-fetches sources
+
+### 📝 Step 2 — Structured 45-Minute Lesson Generation
+- Generates a **strict JSON lesson plan**, validated and normalized, then rendered to rich Markdown
+- Exact 45-minute budget enforced across 7 required sections:
+
+| Section | Minutes |
+|---|---|
+| Introduction (hook) | 3 |
+| Core concept explanation | 7 |
+| Key methods / techniques with examples | 10 |
+| Categories / second concept | 8 |
+| Selected video segment (with timestamps if transcript exists) | 5 |
+| Practical activity (step-by-step + worked solution) | 7 |
+| Comprehension questions & recap | 5 |
+| **Total** | **45** |
+
+- Inline citations `[S1]`, `[S3]` on every factual claim, auto-built References section
+- **Timing feasibility indicator** per section (word-count vs. 130 words/minute baseline)
+- **Altair stacked bar chart** showing the full 45-minute split at a glance
+
+### 🔍 Step 3 — QC Layer 1: Factual Accuracy Review
+- Independent AI adversarial review against retrieved source excerpts
+- Checks: statement correctness, citation support, source reliability, contradictions, uncited claims
+- **Deterministic Python checks** (no AI): invalid `[S#]` IDs, uncited technical paragraphs, hallucinated URLs
+- Output: structured issue list with `severity` (high/medium/low), `location`, `evidence`, `suggested_improvement`
+- Verdict, confidence note, and what-was-verified explanation included
+
+### 🎓 Step 4 — QC Layer 2: Teaching Quality Review
+- Completely independent AI reviewer (different prompt, different report)
+- Checks: objective coverage part-by-part, clarity for learners, jargon before definition, activity feasibility, question alignment, 45-minute pacing
+- **Objective coverage table**: each part of the learning objective → where taught → where tested → covered ✓/✗
+- Same structured issue JSON format as QC 1
+
+### ✏️ Step 5 — 7-Tab Teacher Workspace
+| Tab | What's Inside |
+|---|---|
+| **Lesson** | Rendered Markdown + Altair timing chart |
+| **Sources** | Research cards with type icon, access badge, relevance note, clickable link |
+| **QC 1: Accuracy** | Verdict banner, issue cards with checkboxes, Retry button |
+| **QC 2: Teaching** | Objective coverage table, issue cards, Retry button |
+| **Edit** | Full Markdown text area, save version |
+| **Versions** | Full version history (v1, v2 …) with timestamps, notes, one-click restore |
+| **Preview & Export** | Live HTML preview + 5 download buttons + full ZIP bundle |
+
+- **Checkbox-driven revision:** Select specific QC issues → "Revise using selected suggestions" → LLM applies only those fixes
+- **Before/After diff viewer** (`difflib`) — accept or discard every AI revision
+- **Atomic disk writes** (temp file → `os.replace()`) — teacher edits are **never** overwritten by a failing operation
+- QC reports are automatically marked **stale** after any revision, with a prompt to re-run
+
+### 📦 Step 6 — Export Bundle
+ZIP archive contains:
+```
+lesson.md                 ← Full lesson in Markdown
+lesson.html               ← Styled HTML with print CSS (ready to photocopy)
+references.md             ← Auto-built references table
+qc_report_1_accuracy.md  ← Factual QC report as readable table
+qc_report_2_teaching.md  ← Pedagogical QC report as readable table
+```
+Plus individual download buttons for each file.
+
+---
+
+## 🏗️ Architecture
 
 ```mermaid
 flowchart TD
-    Teacher["Teacher Inputs\n(Title & Objective)"] --> Validator{"Input Validation\n(Neither Blank?)"}
-    Validator -- "Blank" --> ErrorMsg["Validation Error\n(No API Calls)"]
-    Validator -- "Valid" --> Research["Stage 1: Multi-Source Research Retrieval"]
+    A["👩‍🏫 Teacher\nLesson Title + Objective"] --> B
 
-    subgraph ResearchModule["Real Retrieval (Zero Fabricated Links)"]
-        Web["Web Search\n(Tavily / DDG + Trafilatura)"]
-        Books["Academic Books\n(Google Books / OpenLibrary)"]
-        YT["YouTube Media\n(Data API v3 + Transcripts)"]
-        Web --> Normalizer["Normalize to S1, S2...\nAssign Access Level\n(full_text vs description_only)"]
-        Books --> Normalizer
-        YT --> Normalizer
+    subgraph Research["🔬 Step 1 — Research Pipeline (Parallel)"]
+        B["research/aggregator.py\nS1, S2… normalization\naccess_level + cache"] --> C["research/web_search.py\nTavily → DDG+Trafilatura"]
+        B --> D["research/books_search.py\nGoogle Books → OpenLibrary"]
+        B --> E["research/youtube_search.py\nYT API → DDG video + transcript"]
     end
 
-    Research --> ResearchModule
-    Normalizer --> Dossier["Cached Research Dossier"]
+    B --> F
 
-    Dossier --> Stage2["Stage 2: 45-Minute Lesson Generator\n(Gemini 2.5 Flash via llm.py)\nStrict Grounding & Content-Load Feasibility"]
-
-    subgraph QCSuite["Independent Two-Layer QC Suite"]
-        QC1["Stage 3: QC Layer 1 (Factual Accuracy)\n- Adversarial Fact-Checking\n- Non-AI Deterministic Checks\n  * Invalid [S#] citations\n  * Uncited paragraphs\n  * Unverified external URLs\n- Issues Table & Verdict Banner"]
-        QC2["Stage 4: QC Layer 2 (Teaching Quality)\n- Objective Coverage Part-by-Part\n- Unfamiliar/Undefined Jargon\n- 7-Minute Activity Feasibility\n- Question Alignment & Rigor"]
+    subgraph Generation["📝 Step 2 — Lesson Generation"]
+        F["generator/lesson_generator.py\nJSON → StructuredLessonPlan → Markdown\n45-min budget enforced"]
+        F --> G["generator/prompt_templates.py\nSystem + user prompts"]
     end
 
-    Stage2 --> QC1
-    Stage2 --> QC2
+    F --> H
+    F --> I
 
-    subgraph Workspace["Stage 5 & 6: Teacher Workspace & Exporter"]
-        Tabs["7-Tab Interface:\nLesson | Sources | QC 1 | QC 2 | Edit | Versions | Export"]
-        RevisionEngine["Selective Issue Revision Engine\n(Before/After Diff Review)"]
-        Versioning["Immutable File Versioning\n(Atomic Writes: v1, v2, v3...)"]
-        Exporter["Multi-Format Exporter\n(ZIP Bundle, HTML, Markdown, References)"]
-        
-        Tabs <--> RevisionEngine
-        RevisionEngine --> Versioning
-        Versioning --> Exporter
+    subgraph QC["🔍 Steps 3 & 4 — Quality Control"]
+        H["qc/factual_checker.py\nQC Layer 1: Factual Accuracy\nAI adversarial + deterministic checks"]
+        I["qc/pedagogical_checker.py\nQC Layer 2: Teaching Quality\nObjective coverage table"]
     end
 
-    QC1 --> Workspace
-    QC2 --> Workspace
+    H --> J
+    I --> J
+
+    subgraph Storage["💾 Persistence"]
+        J["core/storage.py\nAtomic writes\nVersioning v1→v2→v3…\ndata/lessons/<id>/"]
+    end
+
+    J --> K
+
+    subgraph UI["🖥️ Streamlit UI"]
+        K["app.py Router"] --> L["ui/views/create_view.py\nInputs + Pipeline Coordinator"]
+        K --> M["ui/views/editor_view.py\n7-Tab Workspace"]
+        K --> N["ui/views/library_view.py\nSaved Lessons Catalog"]
+    end
+
+    M --> O["core/exporter.py\nZIP + HTML + Markdown reports"]
+    L --> P["core/llm.py\nGemini wrapper\nExponential backoff + JSON repair\nOffline mock fallback"]
+    H --> P
+    I --> P
+    F --> P
 ```
 
 ---
 
-## ⚡ Quickstart & Setup
+## 📋 Project Structure
 
-### 1. Prerequisites
-- Python 3.11+
-- Virtual environment tool (`venv`)
+```
+lessonforge/
+│
+├── app.py                        # Streamlit entry point & router
+├── config.py                     # Centralised config from .env
+├── requirements.txt              # Pinned dependencies
+├── .env.example                  # Secret placeholders (commit this)
+├── .env                          # Your real keys (never commit)
+├── run.bat                       # Windows one-click launcher
+├── run.ps1                       # PowerShell launcher
+├── repair_lessons.py             # One-time fix for corrupted lesson files
+│
+├── core/
+│   ├── llm.py                    # Gemini wrapper (backoff, JSON repair, offline mock)
+│   ├── models.py                 # All Pydantic schemas
+│   ├── storage.py                # Atomic file I/O + versioning
+│   └── exporter.py               # ZIP builder, HTML renderer, report formatter
+│
+├── research/
+│   ├── aggregator.py             # Parallel retrieval, S# normalization, cache
+│   ├── web_search.py             # Tavily → DuckDuckGo + Trafilatura fallback
+│   ├── books_search.py           # Google Books → OpenLibrary fallback
+│   └── youtube_search.py         # YouTube API → DDG video + transcript fallback
+│
+├── generator/
+│   ├── lesson_generator.py       # JSON lesson plan → Markdown renderer
+│   └── prompt_templates.py       # All LLM system + user prompts
+│
+├── qc/
+│   ├── factual_checker.py        # QC Layer 1: AI + deterministic accuracy checks
+│   └── pedagogical_checker.py    # QC Layer 2: Teaching quality & objective coverage
+│
+├── ui/
+│   ├── styles.py                 # Full SaaS CSS injection
+│   ├── components.py             # Hero header, stepper, Altair chart, diff viewer
+│   └── views/
+│       ├── create_view.py        # Step 1–5 pipeline coordinator
+│       ├── editor_view.py        # 7-tab lesson workspace
+│       └── library_view.py       # Saved lessons catalog
+│
+├── tests/
+│   └── test_lessonforge.py       # 9 pytest unit tests
+│
+├── data/
+│   └── lessons/                  # Auto-created lesson storage
+│       └── <lesson-id>/
+│           ├── metadata.json
+│           ├── lesson.md         # Active version
+│           ├── research.json
+│           ├── qc_factual.json
+│           ├── qc_pedagogical.json
+│           └── versions/
+│               ├── history.json
+│               ├── v1.md
+│               └── v2.md …
+│
+└── sample_outputs/               # Pre-generated demo exports
+```
 
-### 2. Installation
-```powershell
-# Clone or navigate to the project directory
-cd kalvium
+---
 
-# Create and activate virtual environment
+## 🚀 Quick Start
+
+### Prerequisites
+- Python **3.11+** ([download](https://python.org/downloads))
+- A **Google Gemini API key** ([get one free](https://aistudio.google.com/)) — required for live AI generation
+
+### 1 — Clone the repo
+```bash
+git clone https://github.com/praneeshkumar4-eng/teaching-module.git
+cd teaching-module
+```
+
+### 2 — Create a virtual environment
+```bash
+# Windows
 python -m venv .venv
 .\.venv\Scripts\activate
 
-# Install pinned dependencies
+# macOS / Linux
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 3 — Install dependencies
+```bash
 pip install -r requirements.txt
 ```
 
-### 3. API Key Configuration
-Copy `.env.example` to `.env`:
-```powershell
+### 4 — Configure secrets
+```bash
+# Copy the example file
 cp .env.example .env
 ```
-Edit `.env` or configure keys directly within the app's sidebar settings panel:
 
-| Variable | Required? | Purpose & How to Obtain |
-|---|---|---|
-| `GEMINI_API_KEY` | Recommended | Google Gemini LLM API key. Obtain free at [Google AI Studio](https://aistudio.google.com/). If omitted, app operates in offline mock prototype mode. |
-| `GEMINI_MODEL` | Optional | Default: `gemini-2.5-flash`. Supports `gemini-2.0-flash`, `gemini-1.5-pro`. |
-| `TAVILY_API_KEY` | Optional | Web research with full extracted content. Obtain at [Tavily](https://tavily.com/). If omitted, DuckDuckGo (`ddgs`) + `trafilatura` is used automatically. |
-| `GOOGLE_BOOKS_API_KEY` | Optional | Google Books API. Keyless public queries work by default with rate limits; OpenLibrary acts as secondary fallback. |
-| `YOUTUBE_API_KEY` | Optional | YouTube Data API v3 key for educational video search. If omitted, DuckDuckGo video search + `youtube-transcript-api` is used. |
+Open `.env` and fill in your keys:
+```env
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-2.5-flash
 
-### 4. Running the App
-```powershell
+# Optional — app works without these using free fallbacks
+TAVILY_API_KEY=
+GOOGLE_BOOKS_API_KEY=
+YOUTUBE_API_KEY=
+```
+
+### 5 — Launch the app
+```bash
+# Option A: One-click launcher (Windows)
+run.bat
+
+# Option B: Direct command
 .\.venv\Scripts\streamlit.exe run app.py
+
+# Option C: PowerShell (after enabling script execution)
+.\run.ps1
 ```
-Open your browser at `http://localhost:8501`.
+
+The app opens at **http://localhost:8501** 🎉
+
+> **No API key?** LessonForge runs in **Offline Prototype Mode** — all UI features, navigation, versioning, and export work immediately with structured demo content.
 
 ---
 
-## 🔄 How the 6 Stages Work
+## 🔑 API Keys
 
-### Stage 1: Inputs & Normalized Research
-- **Strict Validation:** Ensures neither `Lesson Title` nor `Learning Objective` is blank before invoking any network API.
-- **Demo Pre-loaders:** One-click buttons to load `Test 1: HTTP Protocol` or `Test 2: Python Lists & Tuples`.
-- **Multi-Source Retrieval:** Retrieves 4–6 web pages, 2–3 books, and 2–3 YouTube videos.
-- **Normalization:** Every source is indexed as `S1`, `S2`, `S3`... with title, author/channel, verified URL, retrieved excerpt, and an explicit **Access Level**:
-  - `full_text`: Webpage text or spoken YouTube transcript was fetched.
-  - `description_only`: Only book description/preview or video snippet was available. The UI explicitly states: *"Only the description was available. This source was NOT read or watched in full."*
-- **Grounded Relevance Note:** A concise note explaining how the source supports the specific lesson objective.
+| Key | Required? | Purpose | Free Tier? | Get it |
+|---|---|---|---|---|
+| `GEMINI_API_KEY` | ✅ Required | AI lesson generation, QC layers, revision | Yes | [aistudio.google.com](https://aistudio.google.com) |
+| `TAVILY_API_KEY` | Optional | Enhanced web research with full page extracts | Yes (1000 req/month) | [tavily.com](https://tavily.com) |
+| `GOOGLE_BOOKS_API_KEY` | Optional | Higher rate limits on book search | Yes | [console.cloud.google.com](https://console.cloud.google.com) |
+| `YOUTUBE_API_KEY` | Optional | YouTube Data API v3 video search | Yes (10,000 units/day) | [console.cloud.google.com](https://console.cloud.google.com) |
 
-### Stage 2: Grounded 45-Minute Lesson Generation
-- Generated strictly from research dossier excerpts.
-- Adheres to the exact 45-minute budget:
-  1. Introduction (3 min) — real-world hook and framing
-  2. Core concept explanation (7 min) — clear explanation with analogies
-  3. Key methods/techniques with examples (10 min) — deep dive with code blocks
-  4. Categories/second concept (8 min) — taxonomy and comparisons
-  5. Selected video segment (5 min) — specific video with timestamps or limitation note
-  6. Practical activity (7 min) — step-by-step instructions with teacher worked solution
-  7. Questions and recap (5 min) — recap + 5–8 questions covering recall, classification, analysis, and synthesis
-- Total budget: **exactly 45 minutes** with an interactive Altair stacked bar visual.
-- Per-section content load checks based on ~130 spoken words per minute.
-- Auto-built References section citing only sources actually used.
-
-### Stage 3: QC Layer 1 (Factual Accuracy Review)
-- Independent adversarial review comparing the lesson text against source excerpts.
-- Produces a verdict banner (*"Needs revision"* / *"Looks good"*), confidence note, and audit table.
-- **Deterministic (non-AI) Code Checks:**
-  - Verifies that every `[S#]` tag exists in the research dossier.
-  - Flags uncited technical assertions.
-  - Flags any external URL in the text that did not originate from API results.
-
-### Stage 4: QC Layer 2 (Teaching Quality Review)
-- Independent pedagogical review assessing:
-  - Objective alignment part-by-part.
-  - Learner clarity (flagging unfamiliar jargon used before being defined).
-  - Activity feasibility (can it be completed in 7 minutes?).
-  - Question alignment (does it test application/classification?).
-- Generates an **Objective Coverage Table** mapping each objective component to where it is taught and tested.
-
-### Stage 5: Teacher Review, Editing & Revision
-- 7-tab interface: `Lesson | Sources | QC 1 | QC 2 | Edit | Versions | Preview & Export`.
-- Interactive checkboxes next to QC issues with "Select all" and **"Revise using selected suggestions"**.
-- Calls LLM to apply selected fixes, computes an inline before/after diff (`difflib`), and allows the teacher to **Accept** or **Discard**.
-- Immutable version history (`v1`, `v2`, `v3`...) with one-click rollback.
-- **Atomic File Saves:** Writes to temporary file then atomically renames to guarantee teacher edits are never corrupted or overwritten by failing operations.
-
-### Stage 6: Preview & Multi-Format Downloads
-- Print-ready HTML preview with `@media print` typography.
-- Downloads:
-  - **Single ZIP Bundle:** Contains `lesson.md`, `lesson.html`, `references.md`, `qc_report_1_accuracy.md`, and `qc_report_2_teaching.md`.
-  - **Individual Buttons:** Download any file separately.
-  - Reports formatted as readable Markdown tables (`Issue found | Suggested improvement | Severity | Status: applied/pending`).
+> All keys can also be entered at runtime from the **⚙️ API Keys & AI Settings** panel in the app sidebar — no restart needed.
 
 ---
 
-## 🛡️ Error-Handling Matrix (Demonstrable in Demo)
+## 🧪 Testing
 
-| Situation | System Behavior |
+Run the full test suite:
+```bash
+.\.venv\Scripts\python.exe -m pytest tests/test_lessonforge.py -v
+```
+
+**9 tests covering:**
+
+| Test | What it verifies |
 |---|---|
-| Blank input | Displays clear red error (e.g. *"Learning Objective is required"*), zero API calls made. |
-| Research failure | Displays real error, shows "Retry research" button, preserves user inputs. |
-| Partial research failure | Shows available sources with a yellow warning badge for missing channel (e.g. YouTube quota). |
-| AI generation failure | Displays error, provides "Retry generation" without re-fetching research. |
-| QC step failure | "Retry QC 1" or "Retry QC 2" retries only the affected review without touching the lesson. |
-| Teacher saves edit, later step fails | Teacher's saved work is 100% preserved; atomic file replacement prevents corruption. |
-| Malformed LLM JSON | Auto-repair attempts syntax correction up to 2 times before showing a friendly message. |
-| Rate limit / timeout | Exponential backoff (2s, 4s, 8s) before reporting clean error. |
-| **Developer Mode Simulation** | Hidden sidebar dropdown allows toggling simulated failures for demo recordings. |
+| `test_input_validation` | Blank fields are caught and named precisely |
+| `test_citation_checker_valid` | Valid `[S1]`, `[S2]` citations pass deterministic checks |
+| `test_citation_checker_catches_invalid_ids` | `[S99]` flagged when only S1/S2 exist |
+| `test_citation_checker_catches_unverified_urls` | Hallucinated URLs not in research are flagged |
+| `test_atomic_write` | Temp-file-then-rename atomic write works correctly |
+| `test_storage_lifecycle_and_rollback` | Save → v2 → rollback to v1 lifecycle |
+| `test_lesson_timing_budget_sums_to_45` | Generated lesson is exactly 45 minutes |
+| `test_exporter_bundle_contents` | ZIP contains all 5 required files |
+| `test_failure_simulation_hooks` | Research/QC1/QC2 failure toggles raise expected errors |
 
----
-
-## 🎤 How I'd Explain This in My Demo (Talking Points)
-
-1. **The Core Problem:** Most AI tools create generic, ungrounded slide decks or hallucinate facts and links. Teachers cannot trust an AI that makes up historical dates or programming syntax.
-2. **The Grounding Principle:** LessonForge never lets the LLM invent URLs. We pull real documentation from MDN, official Python docs, academic books via Google Books / OpenLibrary, and real transcripts via `youtube-transcript-api`. If we only got a book's description, the UI tells the teacher honestly: *"Only the description was available. This source was NOT read in full."*
-3. **The 45-Minute Lesson Architecture:** Classroom periods are finite. We enforce a strict 45-minute budget divided into 7 purposeful phases—from the 3-minute inquiry hook to the 7-minute diagnostic lab with worked solutions and exit ticket questions.
-4. **The Dual QC Firewalls:**
-   - *QC Layer 1 (Fact-Checker):* Adversarially cross-checks claims against source excerpts, backed by deterministic Python checks that verify citation IDs and ban fabricated links.
-   - *QC Layer 2 (Instructional Coach):* Checks objective coverage part-by-part, catches technical jargon introduced without definitions, and ensures the 7-minute activity is realistic.
-5. **Teacher in the Driver's Seat:** The teacher selects which QC suggestions to apply. The AI generates a clean revision, displays a visual before/after diff, and requires teacher confirmation. Every change is preserved in local immutable version snapshots with instant rollback.
-6. **Zero Vendor Lock-In:** Local JSON/Markdown files, in-memory ZIP generation, and print-ready HTML exports.
-
----
-
-## ⚠️ Known Limitations
-
-1. **Keyless Google Books Rate Limits:** The keyless Google Books API endpoint frequently returns HTTP 429 when queried from shared IP ranges. LessonForge automatically handles this by falling back to the unmetered OpenLibrary API.
-2. **YouTube Videos Without Closed Captions:** If a video creator disables captions, spoken transcripts cannot be parsed; LessonForge marks the source as `description_only` and alerts the teacher.
-3. **Offline Prototype Mode:** When no Gemini API key is configured, LessonForge uses deterministic fallback responses for local testing.
-
----
-
-## 🧪 Running the Unit Tests
-
-Execute the automated pytest suite:
-```powershell
-.\.venv\Scripts\pytest.exe -v tests/test_lessonforge.py
+Expected output:
 ```
-Outputs: 9 passed in ~1.9s.
-#   t e a c h i n g - m o d u l e  
- 
+9 passed in ~2s
+```
+
+---
+
+## ⚠️ Error Handling
+
+Every failure mode is handled gracefully with a targeted retry button:
+
+| Situation | Behavior |
+|---|---|
+| Blank input | Names the specific missing field — no API call made |
+| Research fails | Shows real error + **Retry Research** button, keeps inputs |
+| Partial research (e.g. YouTube fails) | Shows warning badge on missing type, continues with available sources |
+| AI generation fails | Shows error + **Retry Generation** button — research is not re-fetched |
+| QC Layer 1 fails | **Retry QC 1** button only — lesson is not regenerated |
+| QC Layer 2 fails | **Retry QC 2** button only — lesson is not regenerated |
+| Teacher saved edits + step fails | Saved work is never touched; atomic writes guarantee integrity |
+| Malformed LLM JSON | Auto-repair attempted twice before surfacing error to teacher |
+
+> **Developer Mode** — The sidebar includes a failure simulation dropdown to demonstrate every error scenario for demos and testing.
+
+---
+
+## 🖥️ UI Tour
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ⚒️ LessonForge                                   [Sidebar]     │
+│  Research. Teach. Verify. — Autonomous AI Lesson Creation Suite │
+├─────────────────────────────────────────────────────────────────┤
+│  ① Input ──✓── ② Research ──✓── ③ Lesson ──✓──                 │
+│  ④ QC Accuracy ──✓── ⑤ QC Teaching ──● ⑥ Edit & Export        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Lesson │ Sources (11) │ QC 1: Accuracy │ QC 2: Teaching       │
+│  Edit   │ Versions (v5) │ Preview & Export                     │
+│                                                                 │
+│  ⏱️ Lesson Pacing Timeline ─────────────── 45 / 45 Min         │
+│  [████Intro████][████Core████][████████Methods████████]...     │
+│                                                                 │
+│  ## Introduction (3 min)                                        │
+│  Imagine ordering a meal at a restaurant...                     │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔄 Lesson Generation Pipeline
+
+```
+Teacher Input
+    │
+    ▼
+┌─────────────────────────────────────────────────────┐
+│  RESEARCH  (concurrent — 3 threads)                  │
+│  Web: Tavily / DDG+Trafilatura  → full_text          │
+│  Books: Google Books / OpenLibrary → description     │
+│  YouTube: YT API / DDG → transcript or description   │
+│  Normalize → S1, S2 … Sn  +  relevance notes        │
+└───────────────────┬─────────────────────────────────┘
+                    │  ResearchDossier
+                    ▼
+┌─────────────────────────────────────────────────────┐
+│  GENERATION  (Gemini / offline mock)                 │
+│  Prompt = system + user + full research context      │
+│  Response: JSON → StructuredLessonPlan               │
+│  Normalize 7 sections, enforce 45 min, render MD     │
+└───────────────────┬─────────────────────────────────┘
+                    │  lesson.md
+          ┌─────────┴──────────┐
+          ▼                    ▼
+┌─────────────────┐  ┌─────────────────────────────┐
+│  QC Layer 1     │  │  QC Layer 2                  │
+│  Factual Audit  │  │  Pedagogical Audit           │
+│  AI + Python    │  │  Objective Coverage Table    │
+│  deterministic  │  │  Pacing, Jargon, Questions   │
+└────────┬────────┘  └───────────┬─────────────────┘
+         └──────────┬────────────┘
+                    ▼
+         ┌────────────────────┐
+         │  LessonPackage     │
+         │  Atomic disk save  │
+         │  data/lessons/<id> │
+         └────────────────────┘
+```
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technology |
+|---|---|
+| **UI** | [Streamlit](https://streamlit.io) with custom SaaS CSS, Altair charts |
+| **AI** | [Google Gemini](https://aistudio.google.com) via `google-genai` SDK (`gemini-2.5-flash`) |
+| **Web research** | [Tavily](https://tavily.com) → [DuckDuckGo](https://duckduckgo.com) + [Trafilatura](https://trafilatura.readthedocs.io) |
+| **Book research** | [Google Books API](https://developers.google.com/books) → [OpenLibrary](https://openlibrary.org/developers/api) |
+| **Video research** | [YouTube Data API v3](https://developers.google.com/youtube) → `youtube-transcript-api` |
+| **Data models** | [Pydantic v2](https://docs.pydantic.dev) |
+| **Visualisation** | [Altair](https://altair-viz.github.io) stacked bar charts |
+| **Storage** | Local JSON + Markdown under `data/lessons/` — no database |
+| **Diffs** | Python standard library `difflib` |
+| **Export** | `zipfile` (in-memory ZIP), `markdown` (HTML render) |
+| **Testing** | [pytest](https://pytest.org) |
+
+---
+
+## 📌 Key Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| **All LLM calls go through `core/llm.py`** | Single swap point to change AI provider |
+| **Atomic writes everywhere** | `tempfile → os.replace()` — teacher edits survive any crash |
+| **Research cached in memory** | Retrying generation never wastes API quota re-fetching sources |
+| **LLM never generates URLs** | All URLs come from API results only — prevents hallucination |
+| **QC layers are independent** | Different prompts, different data structures, different retry buttons |
+| **Offline prototype mode** | Full demo without any API key; structured mock returns real lesson content |
+| **access_level badges mandatory** | Teachers always know if a source was read in full or only described |
+
+---
+
+## 📄 License
+
+MIT License — free to use, modify, and distribute.
+
+---
+
+<div align="center">
+
+Built with ❤️ for teachers · Powered by [Google Gemini](https://deepmind.google/technologies/gemini/) · UI by [Streamlit](https://streamlit.io)
+
+**[⬆ Back to top](#️-lessonforge)**
+
+</div>
