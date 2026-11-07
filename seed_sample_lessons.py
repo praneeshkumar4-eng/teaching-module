@@ -435,3 +435,4 @@ def seed_lessons():
 
 if __name__ == "__main__":
     seed_lessons()
+

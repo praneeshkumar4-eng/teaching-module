@@ -241,3 +241,4 @@ def test_failure_simulation_hooks():
 
     finally:
         set_simulated_failure(None)
+

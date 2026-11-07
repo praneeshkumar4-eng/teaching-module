@@ -4,3 +4,4 @@ Write-Host "Starting LessonForge - AI Lesson Creation Suite..." -ForegroundColor
 Write-Host "========================================================" -ForegroundColor Cyan
 
 & ".\.venv\Scripts\streamlit.exe" run app.py
+
