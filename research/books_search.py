@@ -135,3 +135,4 @@ def _search_open_library(query: str, max_results: int = 4) -> List[BookSource]:
     except Exception as e:
         logger.error(f"OpenLibrary book search failed: {e}")
         return []
+

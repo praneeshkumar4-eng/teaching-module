@@ -1,5 +1,6 @@
 # Core Application & UI
 streamlit>=1.35.0
+altair>=5.0.0
 python-dotenv>=1.0.0
 pydantic>=2.7.0
 jinja2>=3.1.4
@@ -13,5 +14,9 @@ requests>=2.31.0
 
 # Research & Retrieval
 duckduckgo_search>=7.0.0
+ddgs>=9.0.0
 trafilatura>=1.8.0
 youtube-transcript-api>=0.6.2
+
+# Testing
+pytest>=8.0.0

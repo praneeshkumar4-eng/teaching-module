@@ -1,12 +1,15 @@
 """
 Local file storage engine for LessonForge.
-Persists lessons, metadata, research dossiers, QC reports, and version history
-strictly under data/lessons/<lesson_id>/ without an external database.
+Provides atomic writes (temp file then rename) under data/lessons/<lesson_id>/,
+preserving previous versions (v1, v2, v3...), and guaranteeing teacher edits
+are never overwritten by failed operations.
 """
 import json
 import logging
+import os
 import re
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -19,6 +22,7 @@ from core.models import (
     QCFactualReport,
     QCPedagogicalReport,
     ResearchDossier,
+    StructuredLessonPlan,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,9 +41,26 @@ def get_lesson_dir(lesson_id: str) -> Path:
     return config.data_dir / lesson_id
 
 
+def atomic_write_text(target_path: Path, content: str):
+    """Atomically writes text to disk using a temporary file and atomic replace."""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = target_path.parent
+    with tempfile.NamedTemporaryFile("w", dir=temp_dir, delete=False, encoding="utf-8") as tf:
+        tf.write(content)
+        temp_name = tf.name
+
+    os.replace(temp_name, target_path)
+
+
+def atomic_write_json(target_path: Path, data: dict):
+    """Atomically writes JSON to disk using a temporary file and atomic replace."""
+    content = json.dumps(data, indent=2, ensure_ascii=False)
+    atomic_write_text(target_path, content)
+
+
 def save_new_lesson(package: LessonPackage) -> str:
     """
-    Saves a newly created LessonPackage to disk.
+    Saves a newly created LessonPackage to disk atomically.
     Creates data/lessons/<lesson_id>/ and saves all JSON and MD files.
     """
     lesson_id = package.metadata.id
@@ -49,30 +70,23 @@ def save_new_lesson(package: LessonPackage) -> str:
     versions_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Save metadata.json
-    with open(target_dir / "metadata.json", "w", encoding="utf-8") as f:
-        json.dump(package.metadata.model_dump(), f, indent=2, ensure_ascii=False)
+    atomic_write_json(target_dir / "metadata.json", package.metadata.model_dump())
 
     # 2. Save active lesson.md
-    with open(target_dir / "lesson.md", "w", encoding="utf-8") as f:
-        f.write(package.markdown_content)
+    atomic_write_text(target_dir / "lesson.md", package.markdown_content)
 
     # 3. Save research.json
-    with open(target_dir / "research.json", "w", encoding="utf-8") as f:
-        json.dump(package.research_dossier.model_dump(), f, indent=2, ensure_ascii=False)
+    atomic_write_json(target_dir / "research.json", package.research_dossier.model_dump())
 
     # 4. Save QC reports if present
     if package.qc_factual:
-        with open(target_dir / "qc_factual.json", "w", encoding="utf-8") as f:
-            json.dump(package.qc_factual.model_dump(), f, indent=2, ensure_ascii=False)
+        atomic_write_json(target_dir / "qc_factual.json", package.qc_factual.model_dump())
 
     if package.qc_pedagogical:
-        with open(target_dir / "qc_pedagogical.json", "w", encoding="utf-8") as f:
-            json.dump(package.qc_pedagogical.model_dump(), f, indent=2, ensure_ascii=False)
+        atomic_write_json(target_dir / "qc_pedagogical.json", package.qc_pedagogical.model_dump())
 
     # 5. Save v1 snapshot in versions/
-    v1_file = versions_dir / "v1.md"
-    with open(v1_file, "w", encoding="utf-8") as f:
-        f.write(package.markdown_content)
+    atomic_write_text(versions_dir / "v1.md", package.markdown_content)
 
     history = [
         {
@@ -81,16 +95,15 @@ def save_new_lesson(package: LessonPackage) -> str:
             "note": "Initial generation"
         }
     ]
-    with open(versions_dir / "history.json", "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
+    atomic_write_json(versions_dir / "history.json", history)
 
-    logger.info(f"Successfully saved new lesson to {target_dir}")
+    logger.info(f"Successfully saved new lesson atomically to {target_dir}")
     return lesson_id
 
 
-def save_lesson_version(lesson_id: str, new_content: str, note: str = "Teacher edit") -> int:
+def save_lesson_version(lesson_id: str, new_content: str, note: str = "Manual edit") -> int:
     """
-    Saves an updated version of the lesson, preserving historical snapshots.
+    Atomically saves an updated version of the lesson, preserving historical snapshots.
     """
     target_dir = get_lesson_dir(lesson_id)
     if not target_dir.exists():
@@ -111,25 +124,21 @@ def save_lesson_version(lesson_id: str, new_content: str, note: str = "Teacher e
 
     next_version = len(history) + 1
 
-    # Save new version file
-    ver_file = versions_dir / f"v{next_version}.md"
-    with open(ver_file, "w", encoding="utf-8") as f:
-        f.write(new_content)
+    # Atomic write for new version snapshot
+    atomic_write_text(versions_dir / f"v{next_version}.md", new_content)
 
-    # Update active lesson.md
-    with open(target_dir / "lesson.md", "w", encoding="utf-8") as f:
-        f.write(new_content)
+    # Atomic write for active lesson.md
+    atomic_write_text(target_dir / "lesson.md", new_content)
 
-    # Update history log
+    # Update history log atomically
     history.append({
         "version_number": next_version,
         "saved_at": datetime.now().isoformat(),
         "note": note
     })
-    with open(history_file, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
+    atomic_write_json(history_file, history)
 
-    # Update metadata
+    # Update metadata atomically
     meta_file = target_dir / "metadata.json"
     if meta_file.exists():
         try:
@@ -138,8 +147,7 @@ def save_lesson_version(lesson_id: str, new_content: str, note: str = "Teacher e
             meta_dict["current_version"] = next_version
             meta_dict["total_versions"] = next_version
             meta_dict["updated_at"] = datetime.now().isoformat()
-            with open(meta_file, "w", encoding="utf-8") as f:
-                json.dump(meta_dict, f, indent=2)
+            atomic_write_json(meta_file, meta_dict)
         except Exception as e:
             logger.error(f"Failed to update metadata version: {e}")
 
@@ -150,20 +158,36 @@ def save_lesson_version(lesson_id: str, new_content: str, note: str = "Teacher e
 def update_qc_reports(
     lesson_id: str,
     qc_factual: Optional[QCFactualReport] = None,
-    qc_pedagogical: Optional[QCPedagogicalReport] = None
+    qc_pedagogical: Optional[QCPedagogicalReport] = None,
 ):
-    """Updates the saved QC report files for an existing lesson."""
+    """Atomically updates the saved QC report files for an existing lesson."""
     target_dir = get_lesson_dir(lesson_id)
     if not target_dir.exists():
         return
 
     if qc_factual:
-        with open(target_dir / "qc_factual.json", "w", encoding="utf-8") as f:
-            json.dump(qc_factual.model_dump(), f, indent=2, ensure_ascii=False)
+        atomic_write_json(target_dir / "qc_factual.json", qc_factual.model_dump())
 
     if qc_pedagogical:
-        with open(target_dir / "qc_pedagogical.json", "w", encoding="utf-8") as f:
-            json.dump(qc_pedagogical.model_dump(), f, indent=2, ensure_ascii=False)
+        atomic_write_json(target_dir / "qc_pedagogical.json", qc_pedagogical.model_dump())
+
+
+def mark_qc_stale(lesson_id: str):
+    """Marks existing QC reports as stale following a revision."""
+    target_dir = get_lesson_dir(lesson_id)
+    if not target_dir.exists():
+        return
+
+    for qc_file, model_cls in [("qc_factual.json", QCFactualReport), ("qc_pedagogical.json", QCPedagogicalReport)]:
+        path = target_dir / qc_file
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                data["is_stale"] = True
+                atomic_write_json(path, data)
+            except Exception as e:
+                logger.error(f"Failed to mark {qc_file} as stale: {e}")
 
 
 def load_lesson(lesson_id: str) -> Optional[LessonPackage]:
@@ -220,12 +244,14 @@ def load_lesson(lesson_id: str) -> Optional[LessonPackage]:
                     if v_file.exists():
                         with open(v_file, "r", encoding="utf-8") as vf:
                             v_content = vf.read()
-                    versions.append(LessonVersion(
-                        version_number=v_num,
-                        saved_at=h.get("saved_at", ""),
-                        note=h.get("note", ""),
-                        content=v_content
-                    ))
+                    versions.append(
+                        LessonVersion(
+                            version_number=v_num,
+                            saved_at=h.get("saved_at", ""),
+                            note=h.get("note", ""),
+                            content=v_content,
+                        )
+                    )
 
         return LessonPackage(
             metadata=metadata,
@@ -233,7 +259,7 @@ def load_lesson(lesson_id: str) -> Optional[LessonPackage]:
             research_dossier=dossier,
             qc_factual=qc_factual,
             qc_pedagogical=qc_pedagogical,
-            versions=versions
+            versions=versions,
         )
     except Exception as e:
         logger.error(f"Failed to load lesson {lesson_id}: {e}")
@@ -281,5 +307,5 @@ def revert_to_version(lesson_id: str, version_number: int) -> bool:
     with open(v_file, "r", encoding="utf-8") as f:
         restored_content = f.read()
 
-    save_lesson_version(lesson_id, restored_content, note=f"Reverted to v{version_number}")
+    save_lesson_version(lesson_id, restored_content, note=f"Reverted to snapshot v{version_number}")
     return True

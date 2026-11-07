@@ -1,15 +1,28 @@
 """
 Core data models for LessonForge.
-Defines typed schemas for research sources, lesson plans, versions, and QC reviews.
+Defines typed schemas for normalized research sources, lesson plans, versions,
+and detailed QC review reports with deterministic checks.
 """
 from datetime import datetime
-from typing import List, Optional
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
-# Research Sources & Dossier Models
+# Research Sources & Dossier Models (Step 1)
 # ---------------------------------------------------------------------------
+
+class AccessLevel(str, Enum):
+    FULL_TEXT = "full_text"
+    DESCRIPTION_ONLY = "description_only"
+
+
+class SourceType(str, Enum):
+    WEB = "web"
+    BOOK = "book"
+    VIDEO = "video"
+
 
 class WebSource(BaseModel):
     id: str
@@ -18,7 +31,7 @@ class WebSource(BaseModel):
     snippet: str = ""
     content: str = ""
     published_date: Optional[str] = None
-    engine: str = "Tavily"  # "Tavily" or "DuckDuckGo"
+    engine: str = "DuckDuckGo"
 
 
 class BookSource(BaseModel):
@@ -37,7 +50,7 @@ class VideoSource(BaseModel):
     id: str
     title: str
     channel: str = ""
-    video_id: str
+    video_id: str = ""
     url: str
     description: str = ""
     duration: Optional[str] = None
@@ -46,97 +59,149 @@ class VideoSource(BaseModel):
     full_transcript: Optional[str] = None
 
 
+class NormalizedSource(BaseModel):
+    id: str  # S1, S2, S3...
+    type: SourceType
+    title: str
+    url: str
+    author_or_channel: str = ""
+    retrieved_text_excerpt: str = ""
+    full_content: str = ""
+    access_level: AccessLevel
+    relevance_note: str = ""  # Grounded LLM note on how it supports the lesson
+    published_year: Optional[str] = None
+    duration: Optional[str] = None
+    transcript_available: bool = False
+    engine: str = ""  # e.g. Tavily, DuckDuckGo, Google Books, YouTube API
+
+
 class ResearchDossier(BaseModel):
     query: str
+    objective: str = ""
     retrieved_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    web_sources: List[WebSource] = Field(default_factory=list)
-    book_sources: List[BookSource] = Field(default_factory=list)
-    video_sources: List[VideoSource] = Field(default_factory=list)
+    sources: List[NormalizedSource] = Field(default_factory=list)
+    has_web: bool = True
+    has_books: bool = True
+    has_videos: bool = True
+    warnings: List[str] = Field(default_factory=list)
     raw_context: str = ""
 
-    def get_citation_summary(self) -> str:
-        """Formats all sources into a reference index with tags like [Web 1], [Book 1]."""
+    def get_source_by_id(self, source_id: str) -> Optional[NormalizedSource]:
+        for s in self.sources:
+            if s.id.upper() == source_id.upper():
+                return s
+        return None
+
+    def get_all_ids(self) -> List[str]:
+        return [s.id for s in self.sources]
+
+    def get_all_urls(self) -> List[str]:
+        return [s.url for s in self.sources if s.url]
+
+    def get_formatted_context(self) -> str:
+        """Builds structured research context for LLM prompts with exact S# tags."""
         lines = []
-        if self.web_sources:
-            lines.append("### Web Sources")
-            for idx, w in enumerate(self.web_sources, 1):
-                lines.append(f"[{idx}] (Web) **{w.title}** - URL: {w.url}")
-                if w.snippet:
-                    lines.append(f"    Excerpt: {w.snippet[:300]}...")
-        if self.book_sources:
-            lines.append("\n### Academic Books")
-            for idx, b in enumerate(self.book_sources, 1):
-                authors = ", ".join(b.authors) if b.authors else "Unknown Authors"
-                lines.append(f"[Book {idx}] **{b.title}** by {authors} ({b.year or 'N/A'}) - {b.info_link or ''}")
-                if b.description:
-                    lines.append(f"    Summary: {b.description[:300]}...")
-        if self.video_sources:
-            lines.append("\n### Video & Media Resources")
-            for idx, v in enumerate(self.video_sources, 1):
-                trans_note = " (Transcript included)" if v.transcript_available else ""
-                lines.append(f"[Video {idx}] **{v.title}** (Channel: {v.channel}){trans_note} - URL: {v.url}")
-                if v.transcript_excerpt:
-                    lines.append(f"    Transcript quote: \"{v.transcript_excerpt[:250]}...\"")
-        return "\n".join(lines)
+        for s in self.sources:
+            access_desc = (
+                "FULL TEXT AVAILABLE"
+                if s.access_level == AccessLevel.FULL_TEXT
+                else "DESCRIPTION ONLY (NOT read or watched in full)"
+            )
+            type_tag = s.type.value.upper()
+            author_tag = f"by {s.author_or_channel}" if s.author_or_channel else ""
+
+            lines.append(
+                f"[{s.id}] TYPE: {type_tag} | TITLE: \"{s.title}\" {author_tag}\n"
+                f"URL: {s.url}\n"
+                f"ACCESS LEVEL: {access_desc}\n"
+                f"RELEVANCE: {s.relevance_note}\n"
+                f"EXCERPT / CONTENT:\n{s.retrieved_text_excerpt or s.full_content[:1500]}\n"
+            )
+        return "\n\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# QC Layer Models
+# Lesson Sections & Timing Budget Models (Step 2)
 # ---------------------------------------------------------------------------
 
-class QCAccuracyFinding(BaseModel):
-    claim: str
-    citation_ref: str = "Uncited"
-    status: str = "VERIFIED"  # "VERIFIED", "CONTRADICTED", "UNSUPPORTED", "ACCURATE"
-    explanation: str
-    suggestion: str
+class LessonSection(BaseModel):
+    title: str
+    minutes: int
+    content: str
+    word_count: int = 0
+    timing_feasibility: str = "Good"  # "Good", "Overloaded", "Sparse"
+    words_per_minute: float = 130.0
+
+
+class StructuredLessonPlan(BaseModel):
+    title: str
+    objective: str
+    total_minutes: int = 45
+    sections: List[LessonSection] = Field(default_factory=list)
+    relevant_videos: List[Dict[str, str]] = Field(default_factory=list)  # Optional video list
+    cited_source_ids: List[str] = Field(default_factory=list)
+    markdown_content: str = ""
+    timing_summary: Dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# QC Layer 1: Factual Accuracy Models (Step 3)
+# ---------------------------------------------------------------------------
+
+class QCIssue(BaseModel):
+    id: str  # e.g. qc1-1 or qc2-1
+    severity: Literal["high", "medium", "low"]
+    location: str  # Section name
+    issue_found: str
+    evidence: str
+    suggested_improvement: str
+    applied: bool = False
+    source_layer: str = "qc1"  # "qc1" or "qc2"
 
 
 class QCFactualReport(BaseModel):
     generated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    overall_score: int = 100  # 0 to 100
-    status: str = "PASS"  # "PASS", "NEEDS_MINOR_REVISION", "NEEDS_MAJOR_REVISION"
-    summary: str = ""
-    findings: List[QCAccuracyFinding] = Field(default_factory=list)
-    verified_count: int = 0
-    unsupported_count: int = 0
-    contradicted_count: int = 0
+    verdict: str = "Needs revision"  # "Needs revision" or "Looks good"
+    confidence_note: str = ""
+    issues: List[QCIssue] = Field(default_factory=list)
+    what_was_verified: str = ""
+    # Deterministic checks
+    invalid_citations: List[str] = Field(default_factory=list)
+    uncited_paragraphs: List[str] = Field(default_factory=list)
+    unverified_urls: List[str] = Field(default_factory=list)
+    deterministic_passed: bool = True
+    is_stale: bool = False
 
 
-class QCPedagogicalRecommendation(BaseModel):
-    id: str
-    area: str  # "Objective Alignment", "Pacing & Timing", "Active Learning", "Cognitive Rigor", "Formative Assessment", "Differentiation"
-    current_state: str
-    recommendation: str
-    concrete_action: str
-    severity: str = "MEDIUM"  # "HIGH", "MEDIUM", "LOW"
-    applied: bool = False
+# ---------------------------------------------------------------------------
+# QC Layer 2: Teaching Quality Models (Step 4)
+# ---------------------------------------------------------------------------
+
+class ObjectiveCoverageItem(BaseModel):
+    objective_part: str
+    where_taught: str
+    where_tested: str
+    covered: bool = True
 
 
 class QCPedagogicalReport(BaseModel):
     generated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    overall_score: int = 100  # 0 to 100
-    status: str = "EXCELLENT"  # "EXCELLENT", "GOOD", "NEEDS_IMPROVEMENT"
-    alignment_score: int = 100
-    pacing_score: int = 100
-    engagement_score: int = 100
-    assessment_score: int = 100
-    strengths: List[str] = Field(default_factory=list)
-    areas_for_growth: List[str] = Field(default_factory=list)
-    recommendations: List[QCPedagogicalRecommendation] = Field(default_factory=list)
+    verdict: str = "Needs revision"  # "Needs revision" or "Looks good"
+    confidence_note: str = ""
+    issues: List[QCIssue] = Field(default_factory=list)
+    objective_coverage: List[ObjectiveCoverageItem] = Field(default_factory=list)
+    what_was_verified: str = ""
+    is_stale: bool = False
 
 
 # ---------------------------------------------------------------------------
-# Lesson & Versioning Models
+# Storage, Metadata & Versioning (Step 5)
 # ---------------------------------------------------------------------------
 
 class LessonMetadata(BaseModel):
     id: str
     title: str
     objective: str
-    grade_level: str = "Grade 9-10"
-    subject: str = "General Science"
-    duration_minutes: int = 45
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     current_version: int = 1
@@ -154,6 +219,7 @@ class LessonPackage(BaseModel):
     metadata: LessonMetadata
     markdown_content: str
     research_dossier: ResearchDossier
+    structured_lesson: Optional[StructuredLessonPlan] = None
     qc_factual: Optional[QCFactualReport] = None
     qc_pedagogical: Optional[QCPedagogicalReport] = None
     versions: List[LessonVersion] = Field(default_factory=list)

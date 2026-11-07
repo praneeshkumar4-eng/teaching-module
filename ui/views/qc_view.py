@@ -196,3 +196,4 @@ def render_qc_view(package: LessonPackage):
                 update_qc_reports(package.metadata.id, qc_pedagogical=new_rep2)
                 st.success("QC Layer 2 updated!")
                 st.rerun()
+

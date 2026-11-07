@@ -154,3 +154,4 @@ def render_research_view(package: LessonPackage):
 
         with st.expander("View Full Unprocessed Context Fed to AI"):
             st.text_area("Raw Context", value=dossier.raw_context, height=350, disabled=True)
+

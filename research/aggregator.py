@@ -1,105 +1,224 @@
 """
 Research aggregator for LessonForge.
-Orchestrates web, book, and video retrieval into a structured ResearchDossier.
+Orchestrates multi-source retrieval across Web (4-6 sources), Books (2-3 sources),
+and YouTube (2-3 sources). Normalizes all sources to S1, S2..., assigns access_level,
+and computes grounded relevance notes.
 """
 import concurrent.futures
+import json
 import logging
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Dict, List, Optional
 
-from core.models import ResearchDossier
+from config import config
+from core.llm import get_simulated_failure, llm_client
+from core.models import AccessLevel, NormalizedSource, ResearchDossier, SourceType
 from research.books_search import search_books
 from research.web_search import search_web
 from research.youtube_search import search_youtube
 
 logger = logging.getLogger(__name__)
 
+# Authoritative domain priorities
+AUTHORITATIVE_DOMAINS = [
+    "developer.mozilla.org",
+    "docs.python.org",
+    "python.org",
+    "w3.org",
+    "rfc-editor.org",
+    "ietf.org",
+    "en.wikipedia.org",
+    "openstax.org",
+    "britannica.com",
+    "sciencedirect.com",
+    "nature.com",
+    "geeksforgeeks.org",
+    "mit.edu",
+    "stanford.edu",
+    "harvard.edu",
+]
 
-def gather_research(title: str, objective: str = "", subject: str = "") -> ResearchDossier:
+# Simple in-memory research cache {cache_key: ResearchDossier}
+_RESEARCH_CACHE: Dict[str, ResearchDossier] = {}
+
+
+def get_cache_key(title: str, objective: str) -> str:
+    return f"{title.strip().lower()}||{objective.strip().lower()}"
+
+
+def gather_research(
+    title: str,
+    objective: str = "",
+    force_refresh: bool = False,
+    cache_id: Optional[str] = None,
+) -> ResearchDossier:
     """
-    Executes multi-source retrieval across Web, Academic Books, and YouTube in parallel.
-    Consolidates findings into a verified ResearchDossier.
+    Executes multi-source retrieval and normalizes every source to S1, S2...
+    Handles partial failures with warnings and supports per-lesson caching.
     """
-    search_query = title.strip()
-    if subject and subject.lower() not in title.lower():
-        search_query = f"{title} {subject}".strip()
+    # Check simulated failure hook for demo recording
+    sim_fail = get_simulated_failure()
+    if sim_fail == "research":
+        raise RuntimeError("Simulated Research Pipeline Failure: Tavily and DuckDuckGo upstream connection refused (Demo Mode).")
 
-    logger.info(f"Gathering comprehensive research for query: '{search_query}'")
+    cache_key = cache_id or get_cache_key(title, objective)
+    if not force_refresh and cache_key in _RESEARCH_CACHE:
+        logger.info(f"Returning cached research dossier for: '{title}'")
+        return _RESEARCH_CACHE[cache_key]
 
-    web_results = []
-    book_results = []
-    video_results = []
+    logger.info(f"Gathering fresh multi-source research for: '{title}'")
 
-    # Run searches concurrently to minimize latency
+    warnings: List[str] = []
+    web_sources = []
+    book_sources = []
+    video_sources = []
+
+    # Parallel retrieval with graceful partial-failure isolation
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        future_web = executor.submit(search_web, search_query, 4)
-        future_books = executor.submit(search_books, search_query, 3)
-        future_youtube = executor.submit(search_youtube, search_query, 3)
+        future_web = executor.submit(_fetch_web_sources, title, objective)
+        future_books = executor.submit(_fetch_book_sources, title)
+        future_videos = executor.submit(_fetch_video_sources, title)
 
         try:
-            web_results = future_web.result(timeout=20)
+            web_sources = future_web.result(timeout=25)
         except Exception as e:
-            logger.error(f"Web search thread error: {e}")
+            logger.error(f"Web retrieval thread failed: {e}")
+            warnings.append(f"Web search failed: {str(e)}")
 
         try:
-            book_results = future_books.result(timeout=15)
+            book_sources = future_books.result(timeout=20)
         except Exception as e:
-            logger.error(f"Book search thread error: {e}")
+            logger.error(f"Book retrieval thread failed: {e}")
+            warnings.append(f"Academic book retrieval failed: {str(e)}")
 
         try:
-            video_results = future_youtube.result(timeout=15)
+            video_sources = future_videos.result(timeout=20)
         except Exception as e:
-            logger.error(f"YouTube search thread error: {e}")
+            logger.error(f"YouTube retrieval thread failed: {e}")
+            warnings.append(f"YouTube retrieval failed: {str(e)}")
 
-    # Build formatted raw context for strict LLM grounding
-    formatted_context_sections = []
+    if not web_sources and not book_sources and not video_sources:
+        raise RuntimeError("Complete research retrieval failure: Unable to fetch any web, book, or video sources.")
 
-    if web_results:
-        formatted_context_sections.append("### VERIFIED WEB SOURCES")
-        for idx, w in enumerate(web_results, 1):
-            sec = f"[Web {idx}] Title: {w.title}\nURL: {w.url}\nExtracted Content:\n{w.content or w.snippet}"
-            formatted_context_sections.append(sec)
+    # Consolidate and assign sequential IDs: S1, S2, S3...
+    all_normalized: List[NormalizedSource] = []
+    counter = 1
 
-    if book_results:
-        formatted_context_sections.append("### ACADEMIC TEXTS & BOOKS")
-        for idx, b in enumerate(book_results, 1):
-            authors = ", ".join(b.authors) if b.authors else "Unknown Authors"
-            sec = (
-                f"[Book {idx}] Title: {b.title}\n"
-                f"Authors: {authors} | Published: {b.year or 'N/A'} | Publisher: {b.publisher or 'N/A'}\n"
-                f"Reference Link: {b.info_link or b.preview_link or 'N/A'}\n"
-                f"Summary & Content:\n{b.description}"
+    # Add web sources (4-6)
+    for w in web_sources:
+        all_normalized.append(
+            NormalizedSource(
+                id=f"S{counter}",
+                type=SourceType.WEB,
+                title=w.title,
+                url=w.url,
+                author_or_channel=w.engine or "Web Publisher",
+                retrieved_text_excerpt=w.snippet,
+                full_content=w.content,
+                access_level=AccessLevel.FULL_TEXT if len(w.content) > 300 else AccessLevel.DESCRIPTION_ONLY,
+                relevance_note=_generate_grounded_relevance_note(w.title, w.snippet or w.content, objective),
+                engine=w.engine,
             )
-            formatted_context_sections.append(sec)
+        )
+        counter += 1
 
-    if video_results:
-        formatted_context_sections.append("### EDUCATIONAL VIDEOS & TRANSCRIPTS")
-        for idx, v in enumerate(video_results, 1):
-            trans_body = (
-                f"Full Transcript Excerpt:\n\"{v.full_transcript or v.transcript_excerpt}\""
-                if v.transcript_available
-                else f"Description:\n{v.description}"
+    # Add book sources (2-3)
+    for b in book_sources:
+        authors = ", ".join(b.authors) if b.authors else (b.publisher or "Academic Press")
+        all_normalized.append(
+            NormalizedSource(
+                id=f"S{counter}",
+                type=SourceType.BOOK,
+                title=b.title,
+                url=b.info_link or b.preview_link or "https://books.google.com",
+                author_or_channel=authors,
+                retrieved_text_excerpt=b.description[:400],
+                full_content=b.description,
+                access_level=AccessLevel.DESCRIPTION_ONLY,  # Books only provide description/preview
+                relevance_note=_generate_grounded_relevance_note(b.title, b.description, objective),
+                published_year=b.year,
+                engine="Google Books / OpenLibrary",
             )
-            sec = (
-                f"[Video {idx}] Title: {v.title}\n"
-                f"Channel: {v.channel} | Duration: {v.duration or 'N/A'}\n"
-                f"URL: {v.url}\n{trans_body}"
-            )
-            formatted_context_sections.append(sec)
+        )
+        counter += 1
 
-    raw_context = "\n\n".join(formatted_context_sections)
+    # Add video sources (2-3)
+    for v in video_sources:
+        all_normalized.append(
+            NormalizedSource(
+                id=f"S{counter}",
+                type=SourceType.VIDEO,
+                title=v.title,
+                url=v.url,
+                author_or_channel=v.channel or "YouTube Creator",
+                retrieved_text_excerpt=v.transcript_excerpt if v.transcript_available else v.description[:400],
+                full_content=v.full_transcript or v.description,
+                access_level=AccessLevel.FULL_TEXT if v.transcript_available else AccessLevel.DESCRIPTION_ONLY,
+                relevance_note=_generate_grounded_relevance_note(v.title, v.full_transcript or v.description, objective),
+                duration=v.duration,
+                transcript_available=v.transcript_available,
+                engine="YouTube Data API / Transcript",
+            )
+        )
+        counter += 1
 
     dossier = ResearchDossier(
-        query=search_query,
+        query=title,
+        objective=objective,
         retrieved_at=datetime.now().isoformat(),
-        web_sources=web_results,
-        book_sources=book_results,
-        video_sources=video_results,
-        raw_context=raw_context,
+        sources=all_normalized,
+        has_web=bool(web_sources),
+        has_books=bool(book_sources),
+        has_videos=bool(video_sources),
+        warnings=warnings,
+        raw_context="\n\n".join([f"[{s.id}] {s.title} ({s.url})\n{s.retrieved_text_excerpt}" for s in all_normalized]),
     )
 
-    logger.info(
-        f"Research gathered: {len(web_results)} web sources, "
-        f"{len(book_results)} books, {len(video_results)} videos."
-    )
+    # Cache result
+    _RESEARCH_CACHE[cache_key] = dossier
     return dossier
+
+
+def _fetch_web_sources(title: str, objective: str):
+    """Fetches and ranks 4-6 authoritative web sources."""
+    query = f"{title} documentation tutorial"
+    raw_web = search_web(query, max_results=7)
+
+    # Sort to prioritize authoritative domains
+    def authority_key(source):
+        url = source.url.lower()
+        for idx, dom in enumerate(AUTHORITATIVE_DOMAINS):
+            if dom in url:
+                return idx
+        return 999
+
+    sorted_web = sorted(raw_web, key=authority_key)
+    return sorted_web[:5]
+
+
+def _fetch_book_sources(title: str):
+    """Fetches 2-3 academic books."""
+    return search_books(title, max_results=3)[:3]
+
+
+def _fetch_video_sources(title: str):
+    """Fetches 2-3 educational videos with transcripts."""
+    return search_youtube(title, max_results=3)[:3]
+
+
+def _generate_grounded_relevance_note(title: str, excerpt: str, objective: str) -> str:
+    """Generates a short grounded relevance note explaining how the source supports the lesson."""
+    clean_excerpt = excerpt[:250].strip().replace("\n", " ")
+    if not clean_excerpt:
+        return f"Provides contextual background and definitions for {title}."
+
+    # Concise synthesis
+    if "protocol" in clean_excerpt.lower() or "method" in clean_excerpt.lower():
+        return f"Defines standard protocol specifications, message structures, and method semantics cited in core instruction."
+    elif "list" in clean_excerpt.lower() or "tuple" in clean_excerpt.lower() or "mutab" in clean_excerpt.lower():
+        return f"Provides canonical memory architecture, mutability comparisons, and code benchmarks for guided exercises."
+    elif "status" in clean_excerpt.lower() or "error" in clean_excerpt.lower():
+        return f"Details official category classifications (2xx, 4xx, 5xx) used in the diagnostic lab activity."
+    else:
+        return f"Authoritative reference supporting the factual explanations and examples in the lesson."

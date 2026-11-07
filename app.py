@@ -1,18 +1,16 @@
 """
-LessonForge - AI-Powered Lesson Creation Workstation for Teachers.
+LessonForge — Autonomous AI Lesson Creation Suite for Teachers.
 Main Streamlit application entry point.
 """
 import streamlit as st
 
 from config import config, reload_config, update_env_file
-from core.llm import llm_client
+from core.llm import get_simulated_failure, llm_client, set_simulated_failure
 from core.storage import list_all_lessons, load_lesson
 from ui.styles import apply_custom_css
 from ui.views.create_view import render_create_view
 from ui.views.editor_view import render_editor_view
 from ui.views.library_view import render_library_view
-from ui.views.qc_view import render_qc_view
-from ui.views.research_view import render_research_view
 
 # Streamlit Page Configuration
 st.set_page_config(
@@ -22,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Apply global styling
+# Inject custom modern SaaS CSS
 st.markdown(apply_custom_css(), unsafe_allow_html=True)
 
 # Initialize Session State
@@ -30,49 +28,24 @@ if "selected_nav" not in st.session_state:
     st.session_state.selected_nav = "➕ Create New Lesson"
 
 if "active_lesson_id" not in st.session_state:
-    # Auto-load most recent lesson if available
     recent_lessons = list_all_lessons()
     st.session_state.active_lesson_id = recent_lessons[0].id if recent_lessons else None
 
 
 # -----------------------------------------------------------------------------
-# Sidebar Navigation & Settings Panel
+# Sidebar: Navigation, Saved Lessons, Settings & Simulation Mode
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("## ⚒️ **LessonForge**")
-    st.caption("Autonomous AI Lesson Creation Engine for Teachers")
+    st.caption("Research. Teach. Verify. • 45-Minute Lesson Suite")
     st.divider()
 
-    # Active Lesson Quick Switcher
-    all_lessons = list_all_lessons()
-    if all_lessons:
-        lesson_ids = [l.id for l in all_lessons]
-        titles_map = {l.id: f"{l.title[:32]}... (v{l.current_version})" for l in all_lessons}
-
-        current_idx = 0
-        if st.session_state.active_lesson_id in lesson_ids:
-            current_idx = lesson_ids.index(st.session_state.active_lesson_id)
-
-        selected_id = st.selectbox(
-            "Active Lesson",
-            options=lesson_ids,
-            index=current_idx,
-            format_func=lambda x: titles_map.get(x, x),
-            help="Select an existing lesson to view or edit.",
-        )
-        if selected_id != st.session_state.active_lesson_id:
-            st.session_state.active_lesson_id = selected_id
-            st.rerun()
-
-    # Navigation Menu
+    # Primary Navigation
     nav_options = [
         "➕ Create New Lesson",
         "📖 Lesson Workspace",
-        "🔍 QC Verification Suite",
-        "🌐 Research Dossier",
-        "📚 Lesson Library",
+        "📚 Saved Lessons Library",
     ]
-
     selected_nav = st.radio(
         "Navigation",
         options=nav_options,
@@ -83,9 +56,65 @@ with st.sidebar:
 
     st.divider()
 
-    # AI & API Configuration
+    # Saved Lessons Quick Switcher
+    st.markdown("#### 📂 Reopen Saved Lesson")
+    all_lessons = list_all_lessons()
+    if all_lessons:
+        lesson_ids = [l.id for l in all_lessons]
+        titles_map = {l.id: f"{l.title[:28]}... (v{l.current_version})" for l in all_lessons}
+
+        current_idx = 0
+        if st.session_state.active_lesson_id in lesson_ids:
+            current_idx = lesson_ids.index(st.session_state.active_lesson_id)
+
+        selected_id = st.selectbox(
+            "Select Lesson",
+            options=lesson_ids,
+            index=current_idx,
+            format_func=lambda x: titles_map.get(x, x),
+            label_visibility="collapsed",
+        )
+        if selected_id != st.session_state.active_lesson_id:
+            st.session_state.active_lesson_id = selected_id
+            st.session_state.selected_nav = "📖 Lesson Workspace"
+            st.rerun()
+    else:
+        st.caption("No lessons saved yet.")
+
+    st.divider()
+
+    # Developer Mode: Failure Simulation Toggle for Demo Video
+    with st.expander("🧪 Developer Mode (Simulate Failure)", expanded=False):
+        st.caption("Demonstrate error handling and recovery buttons in your demo video.")
+        sim_choice = st.selectbox(
+            "Simulate Error Condition",
+            options=[
+                "None (Normal Operation)",
+                "Research Pipeline Failure",
+                "AI Generation Failure",
+                "QC Layer 1 Failure",
+                "QC Layer 2 Failure",
+                "Malformed LLM JSON",
+            ],
+            index=0,
+            key="sim_failure_select",
+        )
+
+        mapping = {
+            "None (Normal Operation)": None,
+            "Research Pipeline Failure": "research",
+            "AI Generation Failure": "generation",
+            "QC Layer 1 Failure": "qc1",
+            "QC Layer 2 Failure": "qc2",
+            "Malformed LLM JSON": "malformed_json",
+        }
+        set_simulated_failure(mapping[sim_choice])
+        if sim_choice != "None (Normal Operation)":
+            st.warning(f"⚠️ Active Failure Simulation: {sim_choice}")
+
+    # API Keys & AI Settings Panel
     with st.expander("⚙️ API Keys & AI Settings", expanded=not config.has_gemini_key):
-        st.caption("Configure API keys for AI generation and research retrieval.")
+        st.caption("Configure keys for Gemini, Tavily, and YouTube.")
 
         gemini_input = st.text_input(
             "Gemini API Key",
@@ -97,7 +126,7 @@ with st.sidebar:
         model_input = st.selectbox(
             "Gemini Model",
             options=["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"],
-            index=0 if config.gemini_model == "gemini-2.5-flash" else 0,
+            index=0,
         )
 
         tavily_input = st.text_input(
@@ -111,7 +140,7 @@ with st.sidebar:
             "YouTube API Key (Optional)",
             value=config.youtube_api_key,
             type="password",
-            help="YouTube Data API v3 key for educational video search.",
+            help="YouTube Data API v3 key. If blank, DuckDuckGo video search is used automatically.",
         )
 
         col_save, col_test = st.columns(2)
@@ -122,7 +151,7 @@ with st.sidebar:
                 update_env_file("TAVILY_API_KEY", tavily_input.strip())
                 update_env_file("YOUTUBE_API_KEY", youtube_input.strip())
                 llm_client.update_key_and_model(gemini_input.strip(), model_input)
-                st.success("Configuration saved to .env!")
+                st.success("Configuration saved!")
                 st.rerun()
 
         with col_test:
@@ -142,13 +171,13 @@ with st.sidebar:
     if config.has_gemini_key:
         st.markdown(
             f'<div style="font-size:0.75rem; color:#16a34a; font-weight:600;">'
-            f'● Gemini Connected ({config.gemini_model})</div>',
+            f'● Gemini Active ({config.gemini_model})</div>',
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
             '<div style="font-size:0.75rem; color:#b45309; font-weight:600;">'
-            '○ Offline Prototype Mode (Set GEMINI_API_KEY in Settings)</div>',
+            '○ Offline Prototype Mode (Set GEMINI_API_KEY to switch to live Gemini)</div>',
             unsafe_allow_html=True,
         )
 
@@ -163,11 +192,11 @@ if st.session_state.active_lesson_id:
 if st.session_state.selected_nav == "➕ Create New Lesson":
     render_create_view()
 
-elif st.session_state.selected_nav == "📚 Lesson Library":
+elif st.session_state.selected_nav == "📚 Saved Lessons Library":
     render_library_view()
 
 elif not active_package:
-    st.warning("No active lesson selected. Create a new lesson or choose one from the library.")
+    st.warning("No active lesson selected. Please create a new lesson or choose one from the library.")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("➕ Create New Lesson", type="primary", use_container_width=True):
@@ -175,14 +204,8 @@ elif not active_package:
             st.rerun()
     with c2:
         if st.button("📚 Browse Lesson Library", use_container_width=True):
-            st.session_state.selected_nav = "📚 Lesson Library"
+            st.session_state.selected_nav = "📚 Saved Lessons Library"
             st.rerun()
 
 elif st.session_state.selected_nav == "📖 Lesson Workspace":
     render_editor_view(active_package)
-
-elif st.session_state.selected_nav == "🔍 QC Verification Suite":
-    render_qc_view(active_package)
-
-elif st.session_state.selected_nav == "🌐 Research Dossier":
-    render_research_view(active_package)

@@ -87,3 +87,4 @@ def update_env_file(key: str, value: str):
 
     os.environ[key] = value
     reload_config()
+

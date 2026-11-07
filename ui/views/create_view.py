@@ -1,7 +1,7 @@
 """
 Lesson Creation View for LessonForge.
-Teacher enters Title and Learning Objective; pipeline researches topic across
-Web, Books, and YouTube, generates 45-minute grounded lesson, and runs QC 1 & 2.
+Handles Step 1 (Inputs and Research) and Step 2 (Lesson Generation),
+with validation, example loading, retry hooks, and real-time status updates.
 """
 import time
 import uuid
@@ -9,173 +9,196 @@ import streamlit as st
 
 from core.models import LessonMetadata, LessonPackage, LessonVersion
 from core.storage import save_new_lesson, slugify
-from generator.lesson_generator import generate_lesson_plan
+from generator.lesson_generator import generate_structured_lesson
 from qc.factual_checker import review_factual_accuracy
 from qc.pedagogical_checker import review_teaching_quality
 from research.aggregator import gather_research
-from ui.components import render_header
+from ui.components import render_access_badge, render_hero_header, render_progress_stepper
+
+# Test example presets for quick demo
+DEMO_EXAMPLES = {
+    "Test 1: HTTP Protocols": {
+        "title": "HTTP Requests and Responses",
+        "objective": "Explain GET and POST methods and distinguish between 2xx, 4xx, and 5xx response status categories.",
+    },
+    "Test 2: Python Collections": {
+        "title": "Python Lists and Tuples",
+        "objective": "Explain the differences between lists and tuples and choose the appropriate collection for simple situations.",
+    },
+}
 
 
 def render_create_view():
-    """Renders the lesson input form and coordinates the generation pipeline."""
-    render_header(
-        title="Create New Lesson",
-        subtitle="Provide a topic and objective. LessonForge retrieves real sources, authors a 45-minute lesson, and audits accuracy and pedagogy.",
-    )
+    """Renders Step 1 inputs, example pre-fillers, and pipeline coordinator."""
+    render_hero_header()
+    render_progress_stepper("Input")
 
-    with st.form("lesson_creation_form"):
-        st.subheader("1. Lesson Objectives & Core Topic")
-        col1, col2 = st.columns([3, 2])
+    # Example pre-loaders for demo
+    st.markdown("#### ⚡ Quick Demo Pre-Loaders")
+    col_e1, col_e2, _ = st.columns([1.5, 1.5, 3])
 
-        with col1:
-            title = st.text_input(
-                "Lesson Title *",
-                placeholder="e.g. Photosynthesis: Light-Dependent Reactions & Cellular Energy",
-                help="A clear, specific title for your 45-minute classroom lesson.",
-            )
+    if "form_title" not in st.session_state:
+        st.session_state.form_title = ""
+    if "form_objective" not in st.session_state:
+        st.session_state.form_objective = ""
 
-        with col2:
-            subject = st.selectbox(
-                "Subject / Discipline",
-                options=[
-                    "General Science",
-                    "Biology & Life Sciences",
-                    "Physics",
-                    "Chemistry",
-                    "History & Social Studies",
-                    "Mathematics",
-                    "Computer Science & AI",
-                    "English & Literature",
-                    "Economics & Civics",
-                    "Environmental Science",
-                    "Other / Interdisciplinary",
-                ],
-                index=1,
-            )
+    with col_e1:
+        if st.button("📋 Load Test 1: HTTP Protocol", use_container_width=True):
+            st.session_state.form_title = DEMO_EXAMPLES["Test 1: HTTP Protocols"]["title"]
+            st.session_state.form_objective = DEMO_EXAMPLES["Test 1: HTTP Protocols"]["objective"]
+            st.rerun()
+
+    with col_e2:
+        if st.button("📋 Load Test 2: Python Lists & Tuples", use_container_width=True):
+            st.session_state.form_title = DEMO_EXAMPLES["Test 2: Python Collections"]["title"]
+            st.session_state.form_objective = DEMO_EXAMPLES["Test 2: Python Collections"]["objective"]
+            st.rerun()
+
+    st.write("")
+
+    # Lesson inputs form
+    with st.container():
+        title = st.text_input(
+            "Lesson Title *",
+            value=st.session_state.form_title,
+            placeholder="e.g. HTTP Requests and Responses",
+            help="A specific, clear title for your 45-minute lesson.",
+            key="input_title_key",
+        )
 
         objective = st.text_area(
-            "Learning Objective (SWBAT - Students Will Be Able To) *",
-            placeholder="e.g. SWBAT explain how photons excite chlorophyll electrons in Photosystem II, trace the flow of electrons through the thylakoid membrane, and predict how light deprivation halts ATP synthesis.",
-            help="Specify a measurable outcome using action verbs from Bloom's Taxonomy.",
-            height=100,
+            "Learning Objective *",
+            value=st.session_state.form_objective,
+            placeholder="e.g. Explain GET and POST methods and distinguish between 2xx, 4xx, and 5xx response status categories.",
+            help="Measurable SWBAT objective stating what students will master.",
+            height=110,
+            key="input_obj_key",
         )
 
-        st.subheader("2. Classroom Parameters & Scaffolds")
-        col3, col4 = st.columns(2)
+        # Update session state with current inputs
+        st.session_state.form_title = title
+        st.session_state.form_objective = objective
 
-        with col3:
-            grade_level = st.selectbox(
-                "Target Grade Level",
-                options=[
-                    "Grade 6-8 (Middle School)",
-                    "Grade 9-10 (Early High School)",
-                    "Grade 11-12 (Advanced / AP)",
-                    "Undergraduate / Introductory College",
-                    "Adult & Vocational Education",
-                ],
-                index=1,
-            )
+        col_btn, _ = st.columns([2, 3])
+        with col_btn:
+            generate_clicked = st.button("🚀 Generate 45-Minute Grounded Lesson", type="primary", use_container_width=True)
 
-        with col4:
-            duration = st.selectbox(
-                "Class Duration",
-                options=["45 Minutes (Standard Class Period)"],
-                index=0,
-                disabled=True,
-                help="LessonForge specializes in rigorous 45-minute bell-to-bell lesson design.",
-            )
+    if generate_clicked:
+        # STRICT VALIDATION: Do not call any API if blank
+        title_stripped = title.strip()
+        obj_stripped = objective.strip()
 
-        extra_instructions = st.text_input(
-            "Curriculum Standard or Special Instructions (Optional)",
-            placeholder="e.g. NGSS HS-LS1-5; include an active 15-minute hands-on card-sort activity.",
-        )
-
-        submitted = st.form_submit_button("🚀 Generate 45-Minute Grounded Lesson", use_container_width=True)
-
-    if submitted:
-        if not title.strip():
-            st.error("Please enter a Lesson Title.")
+        if not title_stripped and not obj_stripped:
+            st.error("❌ Validation Error: Lesson Title and Learning Objective are both required.")
             return
-        if not objective.strip():
-            st.error("Please enter a measurable Learning Objective.")
+        elif not title_stripped:
+            st.error("❌ Validation Error: Lesson Title is required.")
+            return
+        elif not obj_stripped:
+            st.error("❌ Validation Error: Learning Objective is required.")
             return
 
-        _execute_generation_pipeline(
-            title=title.strip(),
-            objective=objective.strip(),
-            subject=subject,
-            grade_level=grade_level,
-            extra_instructions=extra_instructions.strip(),
-        )
+        # Proceed to generation pipeline
+        _execute_generation_pipeline(title_stripped, obj_stripped)
 
 
-def _execute_generation_pipeline(
-    title: str,
-    objective: str,
-    subject: str,
-    grade_level: str,
-    extra_instructions: str,
-):
-    """Executes the autonomous 5-step lesson synthesis & QC pipeline with live status updates."""
-    status_container = st.status("🛠️ Assembling your grounded lesson package...", expanded=True)
+def _execute_generation_pipeline(title: str, objective: str):
+    """Coordinates Step 1 research and Step 2 generation with independent retry buttons."""
+    status_box = st.status("🔍 Step 1/5: Researching topic across Web, Books, and YouTube...", expanded=True)
 
+    # -------------------------------------------------------------------------
+    # Step 1: Research Retrieval
+    # -------------------------------------------------------------------------
+    dossier = None
     try:
-        # Step 1: Research Retrieval
-        status_container.write("🌐 **Step 1/5: Retrieving external research...**")
-        status_container.caption("Querying Web sources (Tavily/DDG + Trafilatura), Academic Books (Google Books/OpenLibrary), and YouTube transcripts...")
-        start_time = time.time()
-        dossier = gather_research(title=title, objective=objective, subject=subject)
-        status_container.write(
-            f"✅ Retrieved {len(dossier.web_sources)} web sources, "
-            f"{len(dossier.book_sources)} academic books, "
-            f"{len(dossier.video_sources)} educational videos."
-        )
+        status_box.write("🌐 **Querying authoritative websites (MDN, W3C, RFCs, educational portals)...**")
+        status_box.write("📚 **Querying academic books (Google Books / OpenLibrary)...**")
+        status_box.write("▶️ **Searching YouTube and extracting real spoken transcripts...**")
 
-        # Step 2: Grounded Lesson Generation
-        status_container.write("✍️ **Step 2/5: Authoring 45-minute lesson plan...**")
-        status_container.caption("Enforcing strict grounding on retrieved research dossier with inline citations [Web X], [Book Y], [Video Z]...")
-        lesson_markdown = generate_lesson_plan(
+        dossier = gather_research(title=title, objective=objective)
+
+        if dossier.warnings:
+            for w in dossier.warnings:
+                status_box.warning(f"⚠️ Partial Research Warning: {w}")
+
+        status_box.write(
+            f"✅ **Research Complete:** Retrieved {len(dossier.sources)} normalized sources "
+            f"(Full text: {sum(1 for s in dossier.sources if s.access_level.value == 'full_text')}, "
+            f"Description only: {sum(1 for s in dossier.sources if s.access_level.value == 'description_only')})."
+        )
+    except Exception as e:
+        status_box.update(label="❌ Step 1 (Research) Failed", state="error", expanded=True)
+        st.error(f"Research Pipeline Error: {str(e)}")
+        st.info("Your inputs have been preserved. You can retry research below.")
+        if st.button("🔄 Retry Research", type="primary"):
+            st.rerun()
+        return
+
+    # -------------------------------------------------------------------------
+    # Step 2: Lesson Generation
+    # -------------------------------------------------------------------------
+    structured_plan = None
+    lesson_markdown = None
+    try:
+        status_box.write("✍️ **Step 2/5: Drafting 45-minute lesson plan...**")
+        status_box.caption("Enforcing exact 45-minute budget (3, 7, 10, 8, 5, 7, 5 min) and citation integrity [S#]...")
+
+        structured_plan, lesson_markdown = generate_structured_lesson(
             title=title,
             objective=objective,
             dossier=dossier,
-            grade_level=grade_level,
-            subject=subject,
-            extra_instructions=extra_instructions,
         )
-        status_container.write("✅ 45-minute structured agenda, teacher script, and activities drafted.")
+        status_box.write("✅ **Lesson Generated:** 7 required sections drafted with exact 45-minute budget.")
+    except Exception as e:
+        status_box.update(label="❌ Step 2 (Lesson Generation) Failed", state="error", expanded=True)
+        st.error(f"Generation Error: {str(e)}")
+        st.info("Research is already cached. You can retry lesson generation without re-fetching sources.")
+        if st.button("🔄 Retry Generation", type="primary"):
+            st.rerun()
+        return
 
-        # Step 3: QC Layer 1 - Factual Accuracy Review
-        status_container.write("🔍 **Step 3/5: Running QC Layer 1 (Factual Accuracy & Hallucination Audit)...**")
-        status_container.caption("Cross-examining all factual claims and definitions against the research dossier...")
-        qc_factual = review_factual_accuracy(lesson_markdown=lesson_markdown, dossier=dossier)
-        status_container.write(
-            f"✅ QC Layer 1 Complete: Score {qc_factual.overall_score}/100 ({qc_factual.status}) — "
-            f"{qc_factual.verified_count} verified, {qc_factual.unsupported_count} unsupported claims."
-        )
+    # -------------------------------------------------------------------------
+    # Step 3: QC Layer 1 (Factual Accuracy)
+    # -------------------------------------------------------------------------
+    qc_factual = None
+    try:
+        status_box.write("🔍 **Step 3/5: Running QC Layer 1 (Factual Accuracy Audit)...**")
+        status_box.caption("Auditing claims against retrieved research and running deterministic URL/citation checks...")
+        qc_factual = review_factual_accuracy(lesson_markdown, dossier)
+        status_box.write(f"✅ **QC Layer 1 Complete:** Verdict: {qc_factual.verdict} ({len(qc_factual.issues)} issues identified).")
+    except Exception as e:
+        status_box.update(label="❌ Step 3 (QC 1) Failed", state="error", expanded=True)
+        st.error(f"QC Layer 1 Error: {str(e)}")
+        if st.button("🔄 Retry QC 1"):
+            st.rerun()
+        return
 
-        # Step 4: QC Layer 2 - Pedagogical Review
-        status_container.write("🎓 **Step 4/5: Running QC Layer 2 (Pedagogical & Instructional Review)...**")
-        status_container.caption("Evaluating 45-minute pacing, Bloom's objective alignment, active learning ratio, and differentiation...")
-        qc_pedagogical = review_teaching_quality(
-            lesson_markdown=lesson_markdown,
-            objective=objective,
-            grade_level=grade_level,
-        )
-        status_container.write(
-            f"✅ QC Layer 2 Complete: Score {qc_pedagogical.overall_score}/100 ({qc_pedagogical.status}) — "
-            f"{len(qc_pedagogical.recommendations)} actionable recommendations generated."
-        )
+    # -------------------------------------------------------------------------
+    # Step 4: QC Layer 2 (Teaching Quality)
+    # -------------------------------------------------------------------------
+    qc_pedagogical = None
+    try:
+        status_box.write("🎓 **Step 4/5: Running QC Layer 2 (Teaching Quality & Pedagogy)...**")
+        status_box.caption("Evaluating objective coverage part-by-part, activity feasibility, and question alignment...")
+        qc_pedagogical = review_teaching_quality(lesson_markdown, objective)
+        status_box.write(f"✅ **QC Layer 2 Complete:** Verdict: {qc_pedagogical.verdict} ({len(qc_pedagogical.issues)} recommendations).")
+    except Exception as e:
+        status_box.update(label="❌ Step 4 (QC 2) Failed", state="error", expanded=True)
+        st.error(f"QC Layer 2 Error: {str(e)}")
+        if st.button("🔄 Retry QC 2"):
+            st.rerun()
+        return
 
-        # Step 5: Persistence & Packaging
-        status_container.write("💾 **Step 5/5: Persisting lesson bundle and version v1...**")
+    # -------------------------------------------------------------------------
+    # Step 5: Packaging & Persistence
+    # -------------------------------------------------------------------------
+    try:
+        status_box.write("💾 **Step 5/5: Assembling package and atomic disk save...**")
         lesson_id = f"{slugify(title)}-{uuid.uuid4().hex[:6]}"
         metadata = LessonMetadata(
             id=lesson_id,
             title=title,
             objective=objective,
-            grade_level=grade_level,
-            subject=subject,
-            duration_minutes=45,
             current_version=1,
             total_versions=1,
         )
@@ -183,30 +206,21 @@ def _execute_generation_pipeline(
             metadata=metadata,
             markdown_content=lesson_markdown,
             research_dossier=dossier,
+            structured_lesson=structured_plan,
             qc_factual=qc_factual,
             qc_pedagogical=qc_pedagogical,
-            versions=[
-                LessonVersion(
-                    version_number=1,
-                    note="Initial generation",
-                    content=lesson_markdown,
-                )
-            ],
+            versions=[LessonVersion(version_number=1, note="Initial generation", content=lesson_markdown)],
         )
 
         save_new_lesson(package)
-        status_container.update(
-            label=f"🎉 Lesson Successfully Created in {int(time.time() - start_time)}s!",
-            state="complete",
-            expanded=False,
-        )
+        status_box.update(label="🎉 Complete Lesson Package Created Successfully!", state="complete", expanded=False)
 
-        # Save to session state and trigger rerun to active view
         st.session_state.active_lesson_id = lesson_id
+        st.session_state.active_tab = "Lesson"
         st.session_state.selected_nav = "📖 Lesson Workspace"
-        st.success("Your complete lesson package is ready! Opening Lesson Workspace...")
+        st.success(f"Lesson '{title}' saved to data/lessons/{lesson_id}/. Opening workspace...")
         st.rerun()
 
     except Exception as e:
-        status_container.update(label="❌ Generation Failed", state="error", expanded=True)
-        st.error(f"Error during lesson generation: {str(e)}")
+        status_box.update(label="❌ Step 5 (Save) Failed", state="error", expanded=True)
+        st.error(f"Storage Error: {str(e)}")

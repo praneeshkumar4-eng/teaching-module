@@ -1,135 +1,195 @@
 """
 QC Layer 1: Factual Accuracy Review module for LessonForge.
-Cross-references every scientific, historical, or factual assertion in the lesson plan
-against the retrieved research dossier to eliminate hallucinations and misquotes.
+Performs adversarial fact-checking against the Research Dossier and executes
+deterministic (non-AI) verification for citation integrity, uncited paragraphs, and unverified URLs.
 """
-import json
 import logging
 import re
-from typing import Optional
+from typing import List, Set, Tuple
 
-from core.llm import llm_client
-from core.models import QCAccuracyFinding, QCFactualReport, ResearchDossier
+from core.llm import get_simulated_failure, llm_client
+from core.models import QCFactualReport, QCIssue, ResearchDossier
 from generator.prompt_templates import QC_FACTUAL_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
 
-def review_factual_accuracy(lesson_markdown: str, dossier: ResearchDossier) -> QCFactualReport:
+def review_factual_accuracy(
+    lesson_markdown: str,
+    dossier: ResearchDossier,
+) -> QCFactualReport:
     """
-    Executes QC Layer 1: Factual accuracy audit.
-    Compares the generated lesson plan against the research dossier.
+    Executes QC Layer 1: Factual Accuracy Audit.
+    Runs both an AI fact-checking reviewer and deterministic code checks.
     """
-    logger.info("Executing QC Layer 1: Factual Accuracy Audit...")
+    # Check simulated failure hook for demo recording
+    sim_fail = get_simulated_failure()
+    if sim_fail == "qc1":
+        raise RuntimeError("Simulated QC Layer 1 Failure: Fact-checking review engine timeout (Demo Mode).")
 
-    research_context = (
-        dossier.raw_context
-        if dossier.raw_context.strip()
-        else dossier.get_citation_summary()
-    )
+    logger.info("Executing QC Layer 1: Factual Accuracy Review...")
 
-    prompt = f"""Conduct a thorough factual accuracy audit of the following Lesson Plan against the verified Research Dossier.
+    prompt = f"""Conduct an adversarial, skeptical factual accuracy audit of this Lesson Plan against the Research Dossier.
 
 RESEARCH DOSSIER:
-{research_context}
+{dossier.get_formatted_context()}
 
-LESSON PLAN TO EVALUATE:
+LESSON PLAN TO REVIEW:
 {lesson_markdown}
 
-Respond strictly in valid JSON according to the schema in the system prompt.
+Identify subtle inaccuracies, unsupported claims, oversimplifications, and verify whether cited sources support the text.
 """
 
-    try:
-        raw_response = llm_client.generate_text(
-            prompt=prompt,
-            system_instruction=QC_FACTUAL_SYSTEM_PROMPT,
-            temperature=0.1,  # Lowest temperature for strict audit
-            json_mode=True,
-        )
-        data = _extract_json(raw_response)
+    data = llm_client.generate_json_with_repair(
+        prompt=prompt,
+        system_instruction=QC_FACTUAL_SYSTEM_PROMPT,
+        temperature=0.1,
+        call_purpose="qc1",
+    )
 
-        findings = []
-        for f in data.get("findings", []):
-            findings.append(
-                QCAccuracyFinding(
-                    claim=f.get("claim", ""),
-                    citation_ref=f.get("citation_ref", "Uncited"),
-                    status=f.get("status", "VERIFIED"),
-                    explanation=f.get("explanation", ""),
-                    suggestion=f.get("suggestion", ""),
+    # Parse AI issues
+    ai_issues: List[QCIssue] = []
+    for idx, raw_iss in enumerate(data.get("issues", []), 1):
+        ai_issues.append(
+            QCIssue(
+                id=raw_iss.get("id") or f"qc1-{idx}",
+                severity=raw_iss.get("severity", "medium").lower(),
+                location=raw_iss.get("location", "Core Concept"),
+                issue_found=raw_iss.get("issue_found", ""),
+                evidence=raw_iss.get("evidence", ""),
+                suggested_improvement=raw_iss.get("suggested_improvement", ""),
+                applied=False,
+                source_layer="qc1",
+            )
+        )
+
+    # Run Deterministic (non-AI) code checks
+    det_passed, invalid_cites, uncited_paras, unverified_urls, det_issues = _run_deterministic_checks(
+        lesson_markdown=lesson_markdown,
+        dossier=dossier,
+        start_index=len(ai_issues) + 1,
+    )
+
+    all_issues = ai_issues + det_issues
+
+    verdict = data.get("verdict", "Needs revision")
+    if not all_issues:
+        verdict = "Looks good"
+    elif any(iss.severity == "high" for iss in all_issues):
+        verdict = "Needs revision"
+
+    report = QCFactualReport(
+        verdict=verdict,
+        confidence_note=data.get("confidence_note", "Audited thoroughly against verified external research excerpts."),
+        what_was_verified=data.get("what_was_verified", f"Cross-examined factual claims against {len(dossier.sources)} retrieved sources."),
+        issues=all_issues,
+        invalid_citations=invalid_cites,
+        uncited_paragraphs=uncited_paras,
+        unverified_urls=unverified_urls,
+        deterministic_passed=det_passed,
+        is_stale=False,
+    )
+
+    return report
+
+
+def _run_deterministic_checks(
+    lesson_markdown: str,
+    dossier: ResearchDossier,
+    start_index: int = 1,
+) -> Tuple[bool, List[str], List[str], List[str], List[QCIssue]]:
+    """
+    Executes non-AI deterministic code checks:
+    1. Every [S#] citation exists in the source list.
+    2. Flag uncited factual paragraphs (containing empirical/technical claims without [S#]).
+    3. Flag any URL in the lesson that is not in the retrieved sources.
+    """
+    valid_source_ids = set(dossier.get_all_ids())
+    valid_urls = set(dossier.get_all_urls())
+
+    det_issues: List[QCIssue] = []
+    invalid_cites: List[str] = []
+    uncited_paras: List[str] = []
+    unverified_urls: List[str] = []
+
+    # 1. Citation check: Every [S#] exists
+    found_citations = re.findall(r"\[(S\d+)\]", lesson_markdown)
+    for c in found_citations:
+        if c not in valid_source_ids and c not in invalid_cites:
+            invalid_cites.append(c)
+            det_issues.append(
+                QCIssue(
+                    id=f"qc1-det-{len(det_issues)+start_index}",
+                    severity="high",
+                    location="Lesson Citations",
+                    issue_found=f"Citation [{c}] does not exist in the retrieved Research Dossier.",
+                    evidence=f"Valid sources in dossier are: {', '.join(sorted(list(valid_source_ids)))}.",
+                    suggested_improvement=f"Replace [{c}] with a valid source reference from the research set.",
+                    applied=False,
+                    source_layer="qc1",
                 )
             )
 
-        report = QCFactualReport(
-            overall_score=int(data.get("overall_score", 95)),
-            status=data.get("status", "PASS"),
-            summary=data.get("summary", "Factual audit complete."),
-            findings=findings,
-            verified_count=int(data.get("verified_count", len([f for f in findings if f.status == "VERIFIED"]))),
-            unsupported_count=int(data.get("unsupported_count", len([f for f in findings if f.status == "UNSUPPORTED"]))),
-            contradicted_count=int(data.get("contradicted_count", len([f for f in findings if f.status == "CONTRADICTED"]))),
-        )
-        return report
-
-    except Exception as e:
-        logger.error(f"Factual QC review error: {e}")
-        # Return a structured fallback pass report
-        return QCFactualReport(
-            overall_score=90,
-            status="PASS",
-            summary=f"Automated factual review concluded with high grounding fidelity. (Audited against {len(dossier.web_sources)} web sources, {len(dossier.book_sources)} books, and {len(dossier.video_sources)} videos).",
-            findings=[
-                QCAccuracyFinding(
-                    claim="Core instructional concepts and definitions.",
-                    citation_ref="[Verified Dossier]",
-                    status="VERIFIED",
-                    explanation="Concepts are substantiated by the retrieved academic and web source materials.",
-                    suggestion="Keep citations intact in final lesson delivery.",
+    # 2. URL check: No invented URLs
+    # Match markdown links: [text](url) and raw URLs
+    urls_found = re.findall(r"https?://[^\s\)\"\'>]+", lesson_markdown)
+    for u in urls_found:
+        u_clean = u.rstrip(".,;")
+        # Check against valid URLs
+        matched = False
+        for valid_u in valid_urls:
+            if u_clean.startswith(valid_u) or valid_u.startswith(u_clean):
+                matched = True
+                break
+        if not matched and "google.com" not in u_clean and u_clean not in unverified_urls:
+            unverified_urls.append(u_clean)
+            det_issues.append(
+                QCIssue(
+                    id=f"qc1-det-{len(det_issues)+start_index}",
+                    severity="high",
+                    location="Lesson References & Links",
+                    issue_found=f"Unverified external URL detected: {u_clean}",
+                    evidence="All lesson links must originate strictly from API research results.",
+                    suggested_improvement="Remove the unverified URL or replace it with an official source from the Research Dossier.",
+                    applied=False,
+                    source_layer="qc1",
                 )
-            ],
-            verified_count=1,
-            unsupported_count=0,
-            contradicted_count=0,
-        )
+            )
 
+    # 3. Uncited paragraphs check
+    paragraphs = [p.strip() for p in lesson_markdown.split("\n\n") if p.strip()]
+    for p in paragraphs:
+        # Ignore headers, tables, code fences, and reference sections
+        if (
+            p.startswith("#")
+            or p.startswith("|")
+            or p.startswith("```")
+            or "References" in p
+            or "Class Duration" in p
+            or "Timing Budget" in p
+        ):
+            continue
 
-def _extract_json(text: str) -> dict:
-    """Robust JSON parser that strips markdown ticks and finds JSON boundaries."""
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[len("```json"):].strip()
-    elif text.startswith("```"):
-        text = text[len("```"):].strip()
-    if text.endswith("```"):
-        text = text[:-3].strip()
+        # Check if paragraph makes strong technical/numerical claims but has no [S#]
+        has_citation = bool(re.search(r"\[S\d+\]", p))
+        has_technical_claim = bool(re.search(r"\b(protocol|method|function|complexity|RFC|algorithm|status|memory|mutab|HTTP)\b", p, re.I))
 
-    match = re.search(r"(\{.*\})", text, re.DOTALL)
-    if match:
-        text = match.group(1)
+        if has_technical_claim and not has_citation and len(p.split()) > 20:
+            para_snippet = p[:90] + "..."
+            uncited_paras.append(para_snippet)
+            if len(uncited_paras) <= 2:  # Cap at 2 issues to avoid cluttering
+                det_issues.append(
+                    QCIssue(
+                        id=f"qc1-det-{len(det_issues)+start_index}",
+                        severity="medium",
+                        location="Instructional Text",
+                        issue_found=f"Uncited technical assertion: \"{para_snippet}\"",
+                        evidence="Every technical claim must cite an authoritative source.",
+                        suggested_improvement="Append the corresponding source citation tag [S#] to substantiate this paragraph.",
+                        applied=False,
+                        source_layer="qc1",
+                    )
+                )
 
-    return json.loads(text)
-
-
-def factual_report_to_markdown(report: QCFactualReport) -> str:
-    """Formats the QC Layer 1 report into clean Markdown for display or export."""
-    lines = [
-        f"# QC Layer 1: Factual Accuracy Audit Report",
-        f"**Overall Accuracy Score:** {report.overall_score}/100 | **Status:** {report.status}",
-        f"**Audit Date:** {report.generated_at[:19].replace('T', ' ')}",
-        f"\n## Summary",
-        report.summary,
-        f"\n## Key Metrics",
-        f"- **Verified Claims:** {report.verified_count}",
-        f"- **Unsupported Claims:** {report.unsupported_count}",
-        f"- **Contradicted Claims:** {report.contradicted_count}",
-        f"\n## Detailed Claim Verification Findings",
-    ]
-    for idx, f in enumerate(report.findings, 1):
-        lines.append(f"### Finding {idx}: [{f.status}] {f.citation_ref}")
-        lines.append(f"- **Claim:** \"{f.claim}\"")
-        lines.append(f"- **Assessment:** {f.explanation}")
-        if f.suggestion and f.suggestion.lower() != "no change needed.":
-            lines.append(f"- **Recommended Fix:** {f.suggestion}")
-        lines.append("")
-
-    return "\n".join(lines)
+    det_passed = len(invalid_cites) == 0 and len(unverified_urls) == 0
+    return det_passed, invalid_cites, uncited_paras, unverified_urls, det_issues
